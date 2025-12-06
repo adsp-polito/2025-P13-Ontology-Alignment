@@ -6,6 +6,8 @@ from pathlib import Path
 import argparse
 
 from ontologies.facade import ontology_loader, SourceTextConfig
+from ontologies.alignment_loader import load_alignment_file
+from data.dataset_builder import build_training_dataset
 
 
 def parse_args() -> argparse.Namespace:
@@ -15,14 +17,16 @@ def parse_args() -> argparse.Namespace:
     Example usage:
 
         python main.py \
-            --src ./data/envo.owl \
-            --tgt ./data/sweet.owl \
-            --src-prefix "http://purl.obolibrary.org/obo/ENVO_" \
-            --tgt-prefix "http://sweetontology.net/" \
+            --src ./datasets/envo.owl \
+            --tgt ./datasets/sweet.owl \
+            --align ./datasets/envo-sweet.rdf \
+            --src-prefix http://purl.obolibrary.org/obo/ENVO_ \
+            --tgt-prefix http://sweetontology.net/ \
             --src-use-description \
             --src-use-synonyms \
-            --out-src ./outputs/envo_text.csv \
-            --out-tgt ./outputs/sweet_text.csv
+            --out-src ./outputs/envo_text.csv  \
+            --out-tgt ./outputs/sweet_text.csv \
+            --out-dataset ./outputs/envo_sweet_training.csv
     """
 
     parser = argparse.ArgumentParser(description="Ontology loading pipeline")
@@ -37,6 +41,13 @@ def parse_args() -> argparse.Namespace:
         required=True,
         help="target ontology path/IRI",
     )
+
+    parser.add_argument(
+        "--align",
+        required=True,
+        help="alignment RDF file path",
+    )
+
     parser.add_argument(
         "--src-prefix",
         default=None,
@@ -89,6 +100,12 @@ def parse_args() -> argparse.Namespace:
         help="Target output CSV path",
     )
 
+    parser.add_argument(
+        "--out-dataset",
+        required=False,
+        help="Final training dataset output CSV path",
+    )
+
     return parser.parse_args()
 
 
@@ -114,15 +131,25 @@ def main() -> None:
         src_text_config=src_text_cfg,
     )
 
+    # Load the alignment file
+    df_alignment = load_alignment_file(args.align)
+
+    # Build the training dataset
+    df_training_final = build_training_dataset(df_src, df_tgt, df_alignment)
+
     out_src_path = Path(args.out_src)
     out_src_path.parent.mkdir(parents=True, exist_ok=True)
 
     out_tgt_path = Path(args.out_tgt)
     out_tgt_path.parent.mkdir(parents=True, exist_ok=True)
 
+    out_train_path = Path(args.out_dataset)
+    out_train_path.parent.mkdir(parents=True, exist_ok=True)
+
     # Save teh DataFrames (iri, local_name, text)
     df_src.to_csv(args.out_src, index=False)
     df_tgt.to_csv(args.out_tgt, index=False)
+    df_training_final.to_csv(args.out_dataset, index=False)
 
 
 if __name__ == "__main__":

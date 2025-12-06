@@ -1,2 +1,6 @@
 owlready2==0.49
 pandas==2.3.3
+rdflib==7.5.0
+torch==2.9.1
+sentence-transformers==5.1.2
+numpy==2.3.5

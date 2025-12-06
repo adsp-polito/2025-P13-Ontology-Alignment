@@ -61,7 +61,10 @@ def ontology_classes_to_dataframe(
 
     # Case 1 → local file
     if parsed.scheme == "" and Path(path).exists():
-        onto_source = Path(path).resolve().as_uri()
+        # Use a native filesystem path when loading local files. Using a file:// URI
+        # can cause an extra leading slash on Windows (e.g. '/C:/...') which breaks
+        # owlready2's file handling. Passing the resolved local path avoids this.
+        onto_source = str(Path(path).resolve()) # instead of Path(path).resolve().as_uri()
     # Case 2 → URL http/https/file
     elif parsed.scheme in ("http", "https", "file"):
         onto_source = path

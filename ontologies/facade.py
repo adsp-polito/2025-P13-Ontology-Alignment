@@ -86,7 +86,10 @@ def ontology_loader(
     df_tgt_uni["text"] = df_tgt_uni.apply(build_target_text, axis=1)
 
     # 4) Riduci ai campi minimi per il join col reference alignment
-    df_src_text = df_src_uni[["iri", "local_name", "text"]].copy()
-    df_tgt_text = df_tgt_uni[["iri", "local_name", "text"]].copy()
+    df_src_text = df_src_uni[["iri", "label", "text"]].copy()
+    df_tgt_text = df_tgt_uni[["iri", "label", "text"]].copy()
+    
+    df_src_renamed = df_src_text.rename(columns={"iri": "source_iri", "text": "source_text"})
+    df_tgt_renamed = df_tgt_text.rename(columns={"iri": "target_iri", "text": "target_text"})
 
-    return df_src_text, df_tgt_text
+    return df_src_renamed, df_tgt_renamed
