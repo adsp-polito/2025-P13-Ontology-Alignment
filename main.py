@@ -146,7 +146,7 @@ def main() -> None:
     out_train_path = Path(args.out_dataset)
     out_train_path.parent.mkdir(parents=True, exist_ok=True)
 
-    # Save teh DataFrames (iri, local_name, text)
+    # Save the DataFrames (iri, local_name, text)
     df_src.to_csv(args.out_src, index=False)
     df_tgt.to_csv(args.out_tgt, index=False)
     df_training_final.to_csv(args.out_dataset, index=False)
