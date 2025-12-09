@@ -162,4 +162,4 @@ def build_input_string(
     short_text = build_source_text(row_src, **source_kwargs)
     rich_text = build_target_text(row_tgt)
 
-    return f"source_attribute: {short_text} || target_concept: {rich_text}"
+    return f"[CLS] {short_text} [SEP] {rich_text} [SEP]"
