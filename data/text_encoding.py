@@ -142,24 +142,3 @@ def build_target_text(row: Mapping[str, Any]) -> str:
 
     rich_text = "; ".join(parts).strip()
     return rich_text
-
-
-def build_input_string(
-    row_src: Mapping[str, Any],
-    row_tgt: Mapping[str, Any],
-    **source_kwargs: Any,
-) -> str:
-    """
-    Build the final input string for the cross-encoder:
-
-        "source_attribute: {SHORT_TEXT} || target_concept: {RICH_TEXT}"
-
-    SHORT_TEXT is built with `build_source_text` and RICH_TEXT with
-    `build_target_text`. Additional keyword arguments are forwarded
-    to `build_source_text` to control which fields are included on
-    the source side (label-only, label+description, etc.).
-    """
-    short_text = build_source_text(row_src, **source_kwargs)
-    rich_text = build_target_text(row_tgt)
-
-    return f"[CLS] {short_text} [SEP] {rich_text} [SEP]"
