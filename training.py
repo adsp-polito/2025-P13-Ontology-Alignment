@@ -6,6 +6,7 @@ import argparse
 from ontologies.facade import ontology_loader, SourceTextConfig
 from ontologies.alignment_loader import load_alignment_file
 from data.dataset_builder import build_training_dataset
+from visualization.alignment_visualization import visualize_alignments
 
 def parse_args() -> argparse.Namespace:
     """
@@ -24,6 +25,7 @@ def parse_args() -> argparse.Namespace:
             --out-src ./outputs/envo_text.csv  \
             --out-tgt ./outputs/sweet_text.csv \
             --out-dataset ./outputs/envo_sweet_training.csv
+            --visualize-alignments
     """
 
     parser = argparse.ArgumentParser(description="Ontology loading pipeline")
@@ -103,6 +105,12 @@ def parse_args() -> argparse.Namespace:
         help="Final training dataset output CSV path",
     )
 
+    parser.add_argument(
+        "--visualize-alignments",
+        action="store_true",
+        help="Visualize the alignments using a graph",
+    )
+
     return parser.parse_args()
 
 
@@ -114,7 +122,7 @@ def main() -> None:
     
     # --- RUN BUILD ---
     # if args.command == 'build':
-    #     print("--- Running Dataset Builder ---")
+    #      print("--- Running Dataset Builder ---")
         
     src_text_cfg = SourceTextConfig(
         use_label=True,
@@ -149,6 +157,15 @@ def main() -> None:
     if args.out_dataset:
         df_training_final.to_csv(args.out_dataset, index=False)
         print(f"Dataset saved to: {args.out_dataset}")
+
+    if args.visualize_alignments:
+        df_alignments = df_training_final[df_training_final["match"]==1.0]
+        visualize_alignments(
+            df_alignments,
+            animated=True,
+            source_ontology_name=Path(args.src).stem,
+            target_ontology_name=Path(args.tgt).stem
+        )
 
 if __name__ == "__main__":
     main()

@@ -2,6 +2,7 @@ import networkx as nx
 import pandas as pd
 import matplotlib.pyplot as plt
 from pyvis.network import Network
+import os
 
 def visualize_alignments(
     df: pd.DataFrame,
@@ -73,10 +74,12 @@ def visualize_alignments(
         net.force_atlas_2based()
 
         # Export and show
-        net.show("ontology_alignment_graph_interactive.html", notebook=False)
-        print("Interactive graph saved as ontology_alignment_graph_interactive.html")
+        base_path = os.path.dirname(__file__) # Directory of this script
+        output_path = os.path.join(base_path, "ontology_alignment_graph_interactive.html") # Save in the same directory as this script
+        net.show(output_path, notebook=False)
+        print("Interactive graph saved to: ", output_path)
 
-if __name__ == "__main__":
+if __name__ == "__main__": # for testing
     df = pd.read_csv("outputs/envo_sweet_training.csv")
     df = df[df["match"]==1.0]
     visualize_alignments(df, animated=True, source_ontology_name="sweet", target_ontology_name="envo")
