@@ -113,42 +113,42 @@ def main() -> None:
     # 2. Dispatch Commands
     
     # --- RUN BUILD ---
-    if args.command == 'build':
-        print("--- Running Dataset Builder ---")
+    # if args.command == 'build':
+    #     print("--- Running Dataset Builder ---")
         
-        src_text_cfg = SourceTextConfig(
-            use_label=True,
-            use_description=args.src_use_description,
-            use_synonyms=args.src_use_synonyms,
-            use_parents=args.src_use_parents,
-            use_equivalent=args.src_use_equivalent,
-            use_disjoint=args.src_use_disjoint,
-        )
+    src_text_cfg = SourceTextConfig(
+        use_label=True,
+        use_description=args.src_use_description,
+        use_synonyms=args.src_use_synonyms,
+        use_parents=args.src_use_parents,
+        use_equivalent=args.src_use_equivalent,
+        use_disjoint=args.src_use_disjoint,
+    )
 
-        df_src, df_tgt = ontology_loader(
-            src_path_or_iri=args.src,
-            tgt_path_or_iri=args.tgt,
-            src_class_prefix=args.src_prefix,
-            tgt_class_prefix=args.tgt_prefix,
-            src_text_config=src_text_cfg,
-        )
+    df_src, df_tgt = ontology_loader(
+        src_path_or_iri=args.src,
+        tgt_path_or_iri=args.tgt,
+        src_class_prefix=args.src_prefix,
+        tgt_class_prefix=args.tgt_prefix,
+        src_text_config=src_text_cfg,
+    )
 
-        df_alignment = load_alignment_file(args.align)
-        df_training_final = build_training_dataset(df_src, df_tgt, df_alignment)
+    df_alignment = load_alignment_file(args.align)
+    df_training_final = build_training_dataset(df_src, df_tgt, df_alignment)
 
-        # Create directories
-        Path(args.out_src).parent.mkdir(parents=True, exist_ok=True)
-        Path(args.out_tgt).parent.mkdir(parents=True, exist_ok=True)
-        if args.out_dataset:
-            Path(args.out_dataset).parent.mkdir(parents=True, exist_ok=True)
+    # Create directories
+    Path(args.out_src).parent.mkdir(parents=True, exist_ok=True)
+    Path(args.out_tgt).parent.mkdir(parents=True, exist_ok=True)
+    if args.out_dataset:
+        Path(args.out_dataset).parent.mkdir(parents=True, exist_ok=True)
 
-        # Save files
-        df_src.to_csv(args.out_src, index=False)
-        df_tgt.to_csv(args.out_tgt, index=False)
-        
-        if args.out_dataset:
-            df_training_final.to_csv(args.out_dataset, index=False)
-            print(f"Dataset saved to: {args.out_dataset}")
+    # Save files
+    df_src.to_csv(args.out_src, index=False)
+    df_tgt.to_csv(args.out_tgt, index=False)
+    
+    if args.out_dataset:
+        df_training_final.to_csv(args.out_dataset, index=False)
+        print(f"Dataset saved to: {args.out_dataset}")
 
 if __name__ == "__main__":
     main()

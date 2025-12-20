@@ -4,6 +4,8 @@ import torch
 import re
 from nltk.metrics.distance import jaro_winkler_similarity
 from Levenshtein import distance as lev_distance
+import logging
+from datetime import datetime
 
 def normalize(
         text: str
@@ -25,7 +27,7 @@ def normalize(
 
     text = text.lower().strip()
 
-    # normalize whitespace: wave    number -> wave number
+    # normalize whitespace
     text = re.sub(r'\s+', ' ', text)
     return text
 
@@ -48,13 +50,10 @@ def label_containment(a: str, b: str) -> bool:
     if not A_tokens or not B_tokens:
         return False
 
-    # hard containment: all tokens of A are in B or viceversa
+    # containment “forte”: tutti i token di A sono in B o viceversa
     return A_tokens.issubset(B_tokens) or B_tokens.issubset(A_tokens)
 
-def token_overlap(
-        a: str,
-        b: str
-)-> float:
+def token_overlap(s, t):
     """
     Compute token overlap as Intersection / max(tokens).
     Parameters:
@@ -63,8 +62,8 @@ def token_overlap(
     Returns:
         float: token overlap ratio
     """
-    A = set(a.split())
-    B = set(b.split())
+    A = set(s.split())
+    B = set(t.split())
     if not A or not B:
         return 0
     return len(A & B) / max(len(A), len(B))
@@ -73,6 +72,7 @@ def lexical_similarity(
         a: str,
         b: str
 ) -> tuple:
+    
     """Compute lexical similarities between two strings: Jaro-Winkler, Levenshtein, Label Containment, and Token Overlap.
 
     Parameters:
@@ -92,14 +92,20 @@ def lexical_similarity(
     # Tokens overlap
     to = token_overlap(a, b)
 
-    return jw, lev, lc, to
+    # Jaccard similarity: to
+    # jt = jaccard_tokens(a, b)
 
-def apply_lexical_filters(
-        jw: float,
-        lev: float,
-        lc: float,
-        to: float
-) -> bool:
+    return jw, lev, lc, to #, jt
+
+def apply_lexical_filters(jw: float,
+           lev: float,
+           lc: float,
+           to: float,
+           sim_emb: float,
+           source_label: str,
+           target_label: str,
+           logger
+) -> tuple:
     """Filter hard negative candidates based on similarity thresholds.
 
     Parameters:
@@ -109,27 +115,52 @@ def apply_lexical_filters(
         to (float): token overlap
         sim_emb (float): embedding cosine similarity
     Returns:
-        bool: True if the candidate is a valid hard negative, False otherwise
+        tuple: (is_valid_hard_negative, reason) where reason is a string explaining the filtering decision
     """
+
+    # 0 - SBERT bypass: semantically strong candidates
+    # if sim_emb >= 0.78 and not lc and to < 0.4:
+    #    return True
 
     # 1 - Label containment => false negative (parent-child or variant)
     if lc:
-        return False
+        logger.debug(f"Filtered [LC]: '{source_label}' - '{target_label}'")
+        return False, "label_containment"
 
     # 2 - Token overlap too high
     if to >= 0.50:
-        return False
+        logger.debug(f"Filtered [TO]: '{source_label}' - '{target_label}'")
+        return False, "high_token_overlap"
     
     # 3 - too similar -> possible actual match
     if jw > 0.85 or lev > 0.85:
-        return False
+        logger.debug(f"Filtered [SIMILAR]: '{source_label}' - '{target_label}'")
+        return False, "potential_actual_match"
 
     # 4 - too dissimilar -> not a hard negative
     if jw < 0.40 or lev < 0.20:
-        return False
+        logger.debug(f"Filtered [DISSIMILAR]: '{source_label}' - '{target_label}'")
+        return False, "too_dissimilar"
 
     # 5 - good hard negative
-    return True
+    logger.debug(f"Accepted [HARD_NEGATIVE]: '{source_label}' - '{target_label}'")
+    return True, "valid_hard_negative"
+
+def log_setup():
+    """
+    Setup logging for hard negatives mining.
+    """
+    log_filename = f"hard_negatives_mining_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log" # logging filename with timestamp
+    logging.basicConfig( # Basic configuration for the logging system.
+        level=logging.DEBUG, # This sets the threshold for what information is captured. It will capture significant milestones and errors but ignore low-level technical noise.
+        format='%(asctime)s - %(levelname)s - %(message)s', # This specifies the layout of each log message, including the timestamp, severity level, and the actual message.
+        handlers=[
+            logging.FileHandler(log_filename), # This handler writes log messages to a file, preserving a record of the program's execution for later review.
+            logging.StreamHandler() # This handler outputs log messages to the console, allowing real-time monitoring of the program's progress and issues.
+        ]
+    )
+    logger = logging.getLogger() # Create a logger object to be used throughout the module.
+    return logger
 
 
 def generate_hard_negatives(
@@ -151,9 +182,14 @@ def generate_hard_negatives(
     Returns:
         pd.DataFrame: hard negatives dataframe
     """
+    
+    logger = log_setup()
+    logger.info("Starting hard negatives mining")
+    stats = {"total_processed": 0, "label_containment": 0, "high_token_overlap": 0, 
+             "potential_actual_match": 0, "too_dissimilar": 0, "valid_found": 0} # statistics tracking
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
-    model = SentenceTransformer('pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb').to(device) # or pritamdeka/S-Scibert-snli-multinli-stsb
+    model = SentenceTransformer('pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb').to(device) # pritamdeka/S-Scibert-snli-multinli-stsb
     embeddings1 = model.encode(df1["source_text"].tolist(), convert_to_tensor=True) # short_text
     embeddings2 = model.encode(df2["target_text"].tolist(), convert_to_tensor=True) # rich_text
     hard_negatives = []
@@ -167,18 +203,30 @@ def generate_hard_negatives(
         similarities = util.cos_sim(emb1, embeddings2)[0] # first row, as cosine_similarity returns a 2D tensor
         # Get top-k similar indices
         top_k = torch.topk(similarities, k=top_n).indices.cpu().numpy()
+        # sim_values = similarities[top_k].cpu().numpy()
+        # threshold_local = np.percentile(sim_values, 75) # 75th percentile of top-n similarities
+
+        #if threshold_local < threshold_min:
+        #    continue # skip concept if similarity is too low
 
         for idx2 in top_k:
+            stats["total_processed"] += 1
             sim = similarities[idx2].item()
-            if not (sim >= threshold_min and sim <= threshold_max): # too dissimilar
+            if not (#sim >= threshold_local and \
+                sim >= threshold_min and \
+                sim <= threshold_max):
+                stats["too_dissimilar"] += 1
+                logger.debug(f"Filtered [OUT_OF_SIM_RANGE]: '{row['source_label']}' - '{df2.iloc[idx2]['target_label']}' with sim {sim:.4f}")
                 continue
 
             source_label = row["source_label"]
             target_label = df2.iloc[idx2]["target_label"]
             jw, lev, lc, to = lexical_similarity(source_label, target_label)
-            is_valid = apply_lexical_filters(jw, lev, lc, to)
+            
+            is_valid, reason = apply_lexical_filters(jw, lev, lc, to, sim, source_label, target_label, logger)
 
             if not is_valid:
+                stats[reason] += 1
                 continue
 
             source_iri = row["source_iri"]
@@ -187,9 +235,10 @@ def generate_hard_negatives(
             if (source_iri, target_iri) not in alignment_set:
                 # If the pair is not in the alignment and similarity is above threshold
                 hard_negatives.append({"source_iri": source_iri, "target_iri": target_iri, "match": 0.0}) # non-match
+                stats["valid_found"] += 1
     
+    logger.info(f"Hard negatives mining completed. Stats: {stats}")
     df_hard_negatives = pd.DataFrame(hard_negatives)
     df_hard_negatives = df_hard_negatives.sample(n=min(num_hard_negatives, len(df_hard_negatives)), random_state=42).reset_index(drop=True)
 
     return df_hard_negatives
-            

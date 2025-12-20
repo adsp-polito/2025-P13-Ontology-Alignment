@@ -1,7 +1,12 @@
 from rdflib import RDF, Graph, Namespace
 import pandas as pd
+from typing import Optional
 
-def load_alignment_file(path: str) -> pd.DataFrame:
+def load_alignment_file(
+        path: str,
+        source_iri_prefix: Optional[str] = None,
+        target_iri_prefix: Optional[str] = None
+) -> pd.DataFrame:
     """
     Load a reference alignment file in RDF format and return a DataFrame
     with the correspondences.
@@ -18,10 +23,13 @@ def load_alignment_file(path: str) -> pd.DataFrame:
     for cell in graph.subjects(RDF.type, ALIGN.alignmentCell):
         e1 = str(graph.value(cell, ALIGN.alignmententity1)) # envo entity
         e2 = str(graph.value(cell, ALIGN.alignmententity2)) # sweet entity
+        if (source_iri_prefix and not e1.startswith(source_iri_prefix)) or \
+              (target_iri_prefix and not e2.startswith(target_iri_prefix)):
+            continue
         # measure = graph.value(cell, ALIGN.alignmentmeasure)
         alignments.append({
-            "source_iri": e1, # swapped because envo is more informative than sweet
-            "target_iri": e2,
+            "source_iri": e2, # swapped because envo is more informative than sweet
+            "target_iri": e1,
             # "label": float(measure) if measure is not None else None,
             "match": 1
         })

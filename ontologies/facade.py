@@ -89,7 +89,7 @@ def ontology_loader(
     df_src_text = df_src_uni[["iri", "local_name", "label", "text"]].copy()
     df_tgt_text = df_tgt_uni[["iri", "local_name", "label", "text"]].copy()
     
-    df_src_renamed = df_src_text.rename(columns={"iri": "source_iri", "text": "source_text"})
-    df_tgt_renamed = df_tgt_text.rename(columns={"iri": "target_iri", "text": "target_text"})
+    df_src_renamed = df_src_text.rename(columns={"iri": "source_iri", "label": "source_label", "text": "source_text"})
+    df_tgt_renamed = df_tgt_text.rename(columns={"iri": "target_iri", "label": "target_label", "text": "target_text"})
 
     return df_src_renamed, df_tgt_renamed

@@ -20,17 +20,22 @@ def generate_random_negatives(
     random_negatives = []
     total_pairs = len(df1) * len(df2)
     sampled_indices = set()
+    alignment_set = set(zip(df_samples["source_iri"], df_samples["target_iri"]))
+    np.random.seed(42)  # For reproducibility
+
     while len(random_negatives) < num_random_negatives and len(sampled_indices) < total_pairs:
-        idx1 = np.random.randint(0, len(df1))
-        idx2 = np.random.randint(0, len(df2))
+        idx1 = np.random.randint(0, len(df1)) # random index for df1
+        idx2 = np.random.randint(0, len(df2)) # random index for df2
+        source_iri = df1.iloc[idx1]["source_iri"]
+        target_iri = df2.iloc[idx2]["target_iri"]
+
         if (idx1, idx2) not in sampled_indices \
-            and (df_samples.empty or not ((df_samples["source_iri"] == df1.iloc[idx1]["source_iri"]) & (df_samples["target_iri"] == df2.iloc[idx2]["target_iri"])).any()):
-            # if (idx1, idx2) not in sampled_indices and the pair is not in the samples (positive sammples + hard negatives)
+            and (source_iri, target_iri) not in alignment_set:
+            # if (idx1, idx2) not in sampled_indices and the pair is not in the samples (positive samples + hard negatives)
             sampled_indices.add((idx1, idx2))
             source_iri = df1.iloc[idx1]["source_iri"]
             target_iri = df2.iloc[idx2]["target_iri"]
             random_negatives.append({"source_iri": source_iri, "target_iri": target_iri, "match": 0.0}) # non-match
+
     df_random_negatives = pd.DataFrame(random_negatives)
-    # print("\nGenerated random negatives:")
-    # print(df_random_negatives.head())
     return df_random_negatives

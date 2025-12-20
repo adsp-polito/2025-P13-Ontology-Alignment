@@ -9,15 +9,21 @@ def build_training_dataset(
         df_align: pd.DataFrame
 ) -> pd.DataFrame:
     
+    # Filter alignment to only include valid IRIs present in source and target dataframes
+    df_align = df_align[df_align["source_iri"].isin(df1["source_iri"]) & df_align["target_iri"].isin(df2["target_iri"])]
+    print(f"Filtered alignment to {len(df_align)} valid correspondences.")
+
     num_alignments = len(df_align)
     # Generate hard negatives -> 50% of the number of alignments
-    df_hard_negatives = generate_hard_negatives(df1, df2, df_align, num_hard_negatives = int(num_alignments/2), top_n=5)
+    df_hard_negatives = generate_hard_negatives(df1, df2, df_align, num_hard_negatives = int(num_alignments/2), top_n=10)
+    print(f"Generated {len(df_hard_negatives)} hard negatives.")
 
     # Combine positives and negatives
     df_training = pd.concat([df_align, df_hard_negatives], axis=0, ignore_index=True)
 
     # Generate random negatives -> 50% of the number of alignments
     df_random_negatives = generate_random_negatives(df1, df2, df_training, num_random_negatives = int(num_alignments/2))
+    print(f"Generated {len(df_random_negatives)} random negatives.")
 
     # Final training dataset (50% positives + 25% hard negatives + 25% random negatives)
     df_training_final = pd.concat([df_training, df_random_negatives], axis=0, ignore_index=True)
@@ -27,4 +33,4 @@ def build_training_dataset(
     merged = merged.merge(df2, on="target_iri", how="left")
 
     # Return final dataset with relevant columns
-    return merged[["source_iri", "target_iri", "source_text", "target_text", "match"]]
+    return merged[["source_iri", "target_iri", "source_label", "target_label", "source_text", "target_text", "match"]]
