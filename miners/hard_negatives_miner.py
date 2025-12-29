@@ -151,11 +151,23 @@ def generate_hard_negatives(
     Returns:
         pd.DataFrame: hard negatives dataframe
     """
+    if num_hard_negatives <= 0:
+        return pd.DataFrame(columns=["source_iri", "target_iri", "match"])
+
+    if df1.empty or df2.empty:
+        return pd.DataFrame(columns=["source_iri", "target_iri", "match"])
+
+    top_n = int(top_n)
+    if top_n <= 0:
+        return pd.DataFrame(columns=["source_iri", "target_iri", "match"])
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = SentenceTransformer('pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb').to(device) # or pritamdeka/S-Scibert-snli-multinli-stsb
     embeddings1 = model.encode(df1["source_text"].tolist(), convert_to_tensor=True) # short_text
     embeddings2 = model.encode(df2["target_text"].tolist(), convert_to_tensor=True) # rich_text
+    top_k_count = min(top_n, len(df2))
+    if top_k_count <= 0:
+        return pd.DataFrame(columns=["source_iri", "target_iri", "match"])
     hard_negatives = []
     threshold_min = 0.55 # minimum similarity threshold
     threshold_max = 0.75 # maximum similarity threshold
@@ -166,9 +178,9 @@ def generate_hard_negatives(
         emb1 = embeddings1[idx]
         similarities = util.cos_sim(emb1, embeddings2)[0] # first row, as cosine_similarity returns a 2D tensor
         # Get top-k similar indices
-        top_k = torch.topk(similarities, k=top_n).indices.cpu().numpy()
+        top_k_idx = torch.topk(similarities, k=top_k_count).indices.cpu().numpy()
 
-        for idx2 in top_k:
+        for idx2 in top_k_idx:
             sim = similarities[idx2].item()
             if not (sim >= threshold_min and sim <= threshold_max): # too dissimilar
                 continue

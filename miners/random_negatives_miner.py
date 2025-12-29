@@ -16,6 +16,11 @@ def generate_random_negatives(
         df_samples (pd.DataFrame): dataframe with existing samples to avoid sampling them again
         num_random_negatives (int, optional): number of random negatives to generate. Defaults to 100.
     """
+    if num_random_negatives <= 0:
+        return pd.DataFrame(columns=["source_iri", "target_iri", "match"])
+
+    if df1.empty or df2.empty:
+        return pd.DataFrame(columns=["source_iri", "target_iri", "match"])
     
     random_negatives = []
     total_pairs = len(df1) * len(df2)

@@ -15,11 +15,11 @@ def parse_args() -> argparse.Namespace:
     Example usage:
 
         python main.py \
-            --src ./datasets/envo.owl \
-            --tgt ./datasets/sweet.owl \
+            --src ./datasets/sweet.owl \
+            --tgt ./datasets/envo.owl \
             --align ./datasets/envo-sweet.rdf \
-            --src-prefix http://purl.obolibrary.org/obo/ENVO_ \
-            --tgt-prefix http://sweetontology.net/ \
+            --src-prefix http://sweetontology.net/ \
+            --tgt-prefix http://purl.obolibrary.org/obo/ENVO_ \
             --src-use-description \
             --src-use-synonyms \
             --out-src ./outputs/envo_text.csv  \

@@ -28,8 +28,8 @@ def load_alignment_file(
             continue
         # measure = graph.value(cell, ALIGN.alignmentmeasure)
         alignments.append({
-            "source_iri": e2, # swapped because envo is more informative than sweet
-            "target_iri": e1,
+            "source_iri": e2, # less informative ontology as source
+            "target_iri": e1, # more informative ontology as target
             # "label": float(measure) if measure is not None else None,
             "match": 1
         })
