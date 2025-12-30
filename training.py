@@ -7,6 +7,7 @@ from ontologies.facade import ontology_loader, SourceTextConfig
 from ontologies.alignment_loader import load_alignment_file
 from data.dataset_builder import build_training_dataset
 from visualization.alignment_visualization import visualize_alignments
+from training.train import train_model
 
 def parse_args() -> argparse.Namespace:
     """
@@ -26,6 +27,9 @@ def parse_args() -> argparse.Namespace:
             --out-tgt ./outputs/sweet_text.csv \
             --out-dataset ./outputs/envo_sweet_training.csv
             --visualize-alignments
+            --model-type bi-encoder
+            --model-name pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb
+            --model-output-dir ./outputs/models/envo_sweet_bi_encoder/
     """
 
     parser = argparse.ArgumentParser(description="Ontology loading pipeline")
@@ -111,6 +115,22 @@ def parse_args() -> argparse.Namespace:
         help="Visualize the alignments using a graph",
     )
 
+    parser.add_argument(
+        "--model-type",
+        choices=["bi-encoder", "cross-encoder"],
+        help="Type of model to train, either bi-encoder or cross-encoder"
+    )
+
+    parser.add_argument(
+        "--model-name",
+        help="Pretrained model name or path from HuggingFace"
+    )
+
+    parser.add_argument(
+        "--model-output-dir",
+        help="Directory to save the trained model"
+    )
+
     return parser.parse_args()
 
 
@@ -166,6 +186,19 @@ def main() -> None:
             source_ontology_name=Path(args.src).stem,
             target_ontology_name=Path(args.tgt).stem
         )
+    
+    if args.model_type and args.model_name and args.model_output_dir:
+
+        print(f"--- Running {args.model_type} Training ---")
+
+        train_model(
+            df_training=df_training_final,
+            model_type=args.model_type,
+            model_name=args.model_name,
+            output_dir=args.model_output_dir
+        )
+
+        print(f"Model saved to: {args.model_output_dir}")
 
 if __name__ == "__main__":
     main()

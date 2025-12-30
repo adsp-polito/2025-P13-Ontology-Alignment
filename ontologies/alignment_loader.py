@@ -31,6 +31,7 @@ def load_alignment_file(
             "source_iri": e2, # less informative ontology as source
             "target_iri": e1, # more informative ontology as target
             # "label": float(measure) if measure is not None else None,
+            "sample_type": "positive", 
             "match": 1
         })
     return pd.DataFrame(alignments)

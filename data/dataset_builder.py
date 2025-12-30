@@ -2,7 +2,6 @@ from miners.hard_negatives_miner import generate_hard_negatives
 from miners.random_negatives_miner import generate_random_negatives
 import pandas as pd
 
-
 def build_training_dataset(
         df1: pd.DataFrame,
         df2: pd.DataFrame,
@@ -15,7 +14,7 @@ def build_training_dataset(
 
     num_alignments = len(df_align)
     # Generate hard negatives -> 50% of the number of alignments
-    df_hard_negatives = generate_hard_negatives(df1, df2, df_align, num_hard_negatives = int(num_alignments/2), top_n=10)
+    df_hard_negatives = generate_hard_negatives(df1, df2, df_align, num_hard_negatives = int(num_alignments/2))
     print(f"Generated {len(df_hard_negatives)} hard negatives.")
 
     # Combine positives and negatives
@@ -33,4 +32,4 @@ def build_training_dataset(
     merged = merged.merge(df2, on="target_iri", how="left")
 
     # Return final dataset with relevant columns
-    return merged[["source_iri", "target_iri", "source_label", "target_label", "source_text", "target_text", "match"]]
+    return merged[["source_iri", "target_iri", "source_label", "target_label", "source_text", "target_text", "sample_type", "match"]]

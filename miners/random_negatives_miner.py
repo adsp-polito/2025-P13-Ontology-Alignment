@@ -40,7 +40,7 @@ def generate_random_negatives(
             sampled_indices.add((idx1, idx2))
             source_iri = df1.iloc[idx1]["source_iri"]
             target_iri = df2.iloc[idx2]["target_iri"]
-            random_negatives.append({"source_iri": source_iri, "target_iri": target_iri, "match": 0.0}) # non-match
+            random_negatives.append({"source_iri": source_iri, "target_iri": target_iri, "sample_type": "random_negative", "match": 0.0}) # non-match
 
     df_random_negatives = pd.DataFrame(random_negatives)
     return df_random_negatives
