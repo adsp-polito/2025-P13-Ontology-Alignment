@@ -32,10 +32,10 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
-    "--unified-csv",
+    "--export-csv",
     default=None,
     help=(
-        "Optional path to a CSV already in unified-view format. "
+        "Optional path to a CSV already in the final format. "
         "If provided, the ontology OWL/RDF will NOT be loaded."
     ),
     )
@@ -104,12 +104,12 @@ def parse_args() -> argparse.Namespace:
 
     return parser.parse_args()
 
-def _validate_unified_view_columns(df: pd.DataFrame) -> None:
+def _validate_export_view_columns(df: pd.DataFrame) -> None:
     required = {"iri", "local_name", "label", "synonyms", "text"}
     missing = required - set(df.columns)
     if missing:
         raise ValueError(
-            f"Unified CSV must come from this framework and contain columns: "
+            f"Export CSV must come from this framework and contain columns: "
             f"{sorted(required)}. Missing: {sorted(missing)}"
         )
 
@@ -128,28 +128,28 @@ def main() -> None:
 
     df_uni: pd.DataFrame
 
-    if args.unified_csv is not None:
-        # CASE A: unified view already exists
-        unified_csv_path = Path(args.unified_csv)
-        print(f"[INFO] Loading unified view from CSV: {unified_csv_path}")
-        df_uni = pd.read_csv(unified_csv_path)
-        _validate_unified_view_columns(df_uni)
-        print(f"[INFO] Loaded unified view with {len(df_uni)} rows.")
+    if args.export_csv is not None:
+        # CASE A: export view already exists
+        export_csv_path = Path(args.export_csv)
+        print(f"[INFO] Loading export view from CSV: {export_csv_path}")
+        df_uni = pd.read_csv(export_csv_path)
+        _validate_export_view_columns(df_uni)
+        print(f"[INFO] Loaded export view with {len(df_uni)} rows.")
 
         # Ensure minimal schema and save internal CSV also in CASE A
         required_min = {"iri", "local_name", "label", "text", "synonyms"}
         missing_min = required_min - set(df_uni.columns)
         if missing_min:
-            raise ValueError(f"Unified CSV missing required minimal columns: {sorted(missing_min)}")
+            raise ValueError(f"Export CSV missing required minimal columns: {sorted(missing_min)}")
 
-        df_export = df_uni[["iri", "local_name", "label", "text", "synonyms"]].copy()
+        df_export = df_uni[["iri","local_name","label","synonyms","text"]].copy()
         print(f"[INFO] Saving internal ontology CSV to: {out_csv}")
         df_export.to_csv(out_csv, index=False)
         print("[INFO] Internal CSV saved successfully.")
     else:
-        # CASE B: build unified view from ontology OWL/RDF
+        # CASE B: build unified/export view from ontology OWL/RDF
         if args.ont_path is None:
-            raise ValueError("You must provide either --unified-csv or --ont-path.")
+            raise ValueError("You must provide either --export-csv or --ont-path.")
 
         # 1) Load the internal ontology as raw DataFrame
         print(f"[INFO] Loading internal ontology from: {ont_path_or_iri}")

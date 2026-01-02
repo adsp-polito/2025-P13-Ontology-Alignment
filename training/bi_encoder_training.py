@@ -79,6 +79,7 @@ def find_best_threshold(
     for threshold in thresholds:
         metrics = evaluate_bi_encoder(model, df_val, threshold=threshold)
         if metrics[metric] > best_value:
+            best_value = metrics[metric]
             best_threshold = threshold
 
     return best_threshold, best_value

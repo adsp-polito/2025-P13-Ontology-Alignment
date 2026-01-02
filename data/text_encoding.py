@@ -63,25 +63,25 @@ def build_source_text(
     if use_synonyms:
         syn = str(row.get("synonyms", "")).strip()
         if syn:
-            parts.append(f"Synonyms: {syn}")
+            parts.append(f"synonyms: {syn}")
 
     # PARENTS
     if use_parents:
         parents = str(row.get("parents_label", "")).strip()
         if parents:
-            parts.append(f"Parents: {parents}")
+            parts.append(f"parents: {parents}")
 
     # EQUIVALENT CLASSES
     if use_equivalent:
         equivalent_to = str(row.get("equivalent_to", "")).strip()
         if equivalent_to:
-            parts.append(f"Equivalent to: {equivalent_to}")
+            parts.append(f"equivalent to: {equivalent_to}")
 
     # DISJOINT CLASSES
     if use_disjoint:
         disjoint_with = str(row.get("disjoint_with", "")).strip()
         if disjoint_with:
-            parts.append(f"Disjoint with: {disjoint_with}")
+            parts.append(f"disjoint with: {disjoint_with}")
 
     short_text = "; ".join(parts).strip()
     return short_text

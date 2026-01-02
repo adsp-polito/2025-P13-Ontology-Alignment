@@ -75,6 +75,7 @@ def find_best_threshold(
     for threshold in thresholds:
         metrics = evaluate_cross_encoder(model, df_val, threshold=threshold)
         if metrics[metric] > best_value:
+            best_value = metrics[metric]
             best_threshold = threshold
 
     return best_threshold, best_value
@@ -127,7 +128,7 @@ def train_cross_encoder(
 
     args = CrossEncoderTrainingArguments(
         output_dir=output_dir,
-        num_train_epochs=10,
+        num_train_epochs=int(num_epochs),
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
         warmup_steps=100,
@@ -135,7 +136,7 @@ def train_cross_encoder(
         # --- WandB Logging Configuration---
         report_to="wandb",  # Enable logging to WandB
         run_name="cross-encoder-training",
-        logging_steps=num_epochs, # Log every 10 steps
+        logging_steps=num_epochs,
         eval_strategy="epoch", # Evaluate after each epoch
         save_strategy="epoch",       # Save checkpoint after each epoch
         save_total_limit=2,          # Keep only the last 2 checkpoints

@@ -291,7 +291,7 @@ def save_offline_bundle(offline_bundle: Dict[str, Any], path: str | Path) -> Non
 def load_offline_bundle(
     path: str | Path,
     *,
-    load_semantic_embeddings: bool = True,
+    load_semantic_embeddings_: bool = True,
     mmap: bool = True,
 ) -> Dict[str, Any]:
     """
@@ -314,7 +314,7 @@ def load_offline_bundle(
         bundle = pickle.load(f)
 
     if (
-        load_semantic_embeddings
+        load_semantic_embeddings_
         and "semantic_index" in bundle
         and isinstance(bundle["semantic_index"], dict)
     ):

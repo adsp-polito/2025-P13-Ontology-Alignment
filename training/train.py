@@ -7,7 +7,8 @@ def train_model(
         df_training: pd.DataFrame,
         model_type: str,
         model_name: str,
-        output_dir: str
+        output_dir: str,
+        num_epochs: int = 10
 ) -> None:
     """
     Train a model (bi-encoder or cross-encoder) on the given training dataframe.
@@ -27,7 +28,7 @@ def train_model(
             df_train,
             df_val,
             df_test,
-            num_epochs=10,
+            num_epochs=int(num_epochs),
             model_name=model_name,
             output_dir=output_dir
         )
@@ -38,7 +39,7 @@ def train_model(
             df_train,
             df_val,
             df_test,
-            num_epochs=10,
+            num_epochs=int(num_epochs),
             model_name=model_name,
             output_dir=output_dir
         )
