@@ -13,6 +13,7 @@ def normalize(
 
     Parameters:
         text (str): input text
+
     Returns:
         str: normalized text
     """
@@ -27,11 +28,31 @@ def normalize(
 
     return text.lower().strip()
 
+
+def normalize_synonyms(
+        synonyms: str
+) -> list[str]:
+    """
+    Normalize synonyms string into a list of normalized synonyms.
+
+    Parameters:
+        synonyms (str): synonyms string separated by "|"
+
+    Returns:
+        list[str]: list of normalized synonyms
+    """
+    if pd.isna(synonyms):
+        return []
+    return [normalize(s) for s in synonyms.split("|") if s.strip()]
+
+
 def is_bad_hard_negative(
         s1: str,
         s2: str,
         tfidf_matrix: spmatrix,
-        label2idx: dict[str, int]
+        label2idx: dict[str, int],
+        source_synonyms: list[str],
+        target_synonyms: list[str]
 ) -> bool:
     """
     Returns True if the two strings are too similar (Risk of False Negative) or too dissimilar.
@@ -41,6 +62,8 @@ def is_bad_hard_negative(
         s2 (str): second string,
         tfidf_matrix (spmatrix): TF-IDF matrix of all labels
         label2idx (dict[str, int]): mapping from label to index in the TF-IDF matrix
+        source_synonyms (list[str]): list of synonyms for the source label
+        target_synonyms (list[str]): list of synonyms for the target label
 
     Returns:
         bool: True if the strings are too similar, False otherwise
@@ -61,6 +84,10 @@ def is_bad_hard_negative(
     s2_compact = s2.replace(" ", "")
     # Example: "mudflat" vs "mud flat"
     if s1_compact in s2_compact or s2_compact in s1_compact:
+        return True
+    
+    # 2. Synonym Containment
+    if s1 in target_synonyms or s2 in source_synonyms:
         return True
 
     # TF-IDF
@@ -127,6 +154,8 @@ def generate_hard_negatives(
     # Precompute normalized labels for lexical similarity filtering
     df1["norm_label"] = df1["source_label"].apply(normalize)
     df2["norm_label"] = df2["target_label"].apply(normalize)
+    df1["norm_synonyms"] = df1["source_synonyms"].apply(normalize_synonyms)
+    df2["norm_synonyms"] = df2["target_synonyms"].apply(normalize_synonyms)
 
     # TF-IDF initalization
     all_labels = df1["norm_label"].tolist() + df2["norm_label"].tolist()
@@ -150,7 +179,7 @@ def generate_hard_negatives(
                 continue
 
             # Lexical Similarity Filtering
-            if is_bad_hard_negative(src_norm, tgt_row["norm_label"], tfidf_matrix, label2idx):
+            if is_bad_hard_negative(src_norm, tgt_row["norm_label"], tfidf_matrix, label2idx, src_row["norm_synonyms"], tgt_row["norm_synonyms"]):
                 continue
 
             hard_negatives.append({
