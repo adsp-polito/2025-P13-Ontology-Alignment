@@ -6,6 +6,7 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 import pandas as pd
 import os
 import wandb
+import optuna
 from .utils import stratified_split, convert_df_to_dataset
 
 def evaluate_bi_encoder(
@@ -55,35 +56,70 @@ def print_metrics(
         print(f"{k}: {v:.4f}")
 
 
-def find_best_threshold(
-      model: SentenceTransformer,
-      df_val: pd.DataFrame,
-      metric: str ="accuracy"
-) -> tuple:
+def objective(
+        trial: optuna.Trial,
+        df_train, df_val,
+        model_name="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
+) -> float:
     """
-    Find the best similarity threshold on the validation set.
 
-    Parameters:
-        model (SentenceTransformer): bi-encoder model
-        df (pd.DataFrame): validation dataframe
-        metric (str, optional): metric to optimize. Defaults to "accuracy".
+
+    Args:
+        trial (optuna.Trial): _description_
+        df_train (_type_): _description_
+        df_val (_type_): _description_
+        model_name (str, optional): _description_. Defaults to "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb".
 
     Returns:
-        tuple: best threshold and corresponding metric value
+        float: _description_
     """
+    # 1. Hyperparameter suggestions
+    # Define the hyperparameter search space
+    lr = trial.suggest_float("learning_rate", 1e-5, 5e-5, log=True)
+    batch_size = trial.suggest_categorical("per_device_train_batch_size", [16, 32])
+    weight_decay = trial.suggest_float("weight_decay", 0.01, 0.1)
+    model = SentenceTransformer(model_name)
 
-    thresholds = [0.5, 0.55, 0.6, 0.65, 0.75, 0.8, 0.85]
-    best_value = -1
-    best_threshold = 0.5
+    dataset_train = convert_df_to_dataset(df_train)
 
-    for threshold in thresholds:
-        metrics = evaluate_bi_encoder(model, df_val, threshold=threshold)
-        if metrics[metric] > best_value:
-            best_value = metrics[metric]
-            best_threshold = threshold
+    # Evaluator for validation
+    evaluator = BinaryClassificationEvaluator(
+        sentences1=df_val["source_text"].tolist(),
+        sentences2=df_val["target_text"].tolist(),
+        labels=df_val["match"].astype(int).tolist(),
+        name=f"optuna_eval_trial_{trial.number}"
+    )
 
-    return best_threshold, best_value
+    train_loss = OnlineContrastiveLoss(model)
 
+    # --- 2. Training Arguments con parametri Optuna ---
+    args = SentenceTransformerTrainingArguments(
+        output_dir=f"./optuna_outputs/trial_{trial.number}",
+        num_train_epochs=3, # Teniamo epoche basse per l'ottimizzazione
+        per_device_train_batch_size=batch_size,
+        learning_rate=lr,
+        weight_decay=weight_decay,
+        warmup_steps=100,
+        fp16=True,
+        eval_strategy="no", # Non serve valutare ad ogni epoca durante optuna
+        save_strategy="no",
+        report_to="none"    # Disattiviamo wandb durante i trial per non intasarlo
+    )
+
+    trainer = SentenceTransformerTrainer(
+        model=model,
+        args=args,
+        train_dataset=dataset_train,
+        loss=train_loss,
+    )
+
+    trainer.train()
+
+    # 3. Evaluation on validation set
+    eval_results = evaluator(model)
+    # BinaryClassificationEvaluator restituisce un float (solitamente Average Precision)
+    print(evaluator.primary_metric)
+    return eval_results[evaluator.primary_metric]
 
 def train_bi_encoder(
         df_train: pd.DataFrame,
@@ -139,9 +175,11 @@ def train_bi_encoder(
     args = SentenceTransformerTrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
+        per_device_train_batch_size=32,
+        per_device_eval_batch_size=32,
         warmup_steps=100,
+        learning_rate=4.5478115144492107e-05,
+        weight_decay=0.06977755733111396,
         
         # --- WandB Logging Configuration---
         report_to="wandb",
@@ -151,7 +189,7 @@ def train_bi_encoder(
         save_strategy="epoch",
         save_total_limit=2,
         load_best_model_at_end=True,
-        metric_for_best_model="eval_val_bi_encoder_cosine_ap", # L'evaluator aggiunge il prefisso
+        metric_for_best_model="eval_val_bi_encoder_cosine_ap",
         greater_is_better=True,
         
         # --- Optimization ---
@@ -175,18 +213,20 @@ def train_bi_encoder(
 
     wandb.finish()
 
-    # Evaluate on validation set using default threshold 0.75
-    metrics = evaluate_bi_encoder(model, df_val, threshold=0.75)
-    print("Validation metrics:")
-    print_metrics(metrics)
+    # Evaluate the model on the validation set
+    final_results = evaluator(model)
     
-    # Find best threshold
-    best_threshold, best_value = find_best_threshold(model, df_val, metric="accuracy")
-    print(f"Best threshold on validation set: {best_threshold} with {best_value:.4f} accuracy")
+    # Best threshold
+    metric = f"{evaluator.name}_cosine_accuracy_threshold"
+    best_threshold = final_results[metric]
+    print(f"Best threshold for metric {metric}: {best_threshold}")
+
+    metrics_val = evaluate_bi_encoder(model, df_test, threshold=best_threshold)
+    print(f"Validation metrics at best threshold {best_threshold}:")
 
     # Test best threshold on test set
     metrics_test = evaluate_bi_encoder(model, df_test, threshold=best_threshold)
-    print("Test metrics at best threshold:")
+    print(f"Test metrics at best threshold {best_threshold}:")
     print_metrics(metrics_test)
 
     model.save(output_dir + "/final_bi_encoder_model")
@@ -195,12 +235,18 @@ def train_bi_encoder(
 if __name__ == "__main__": # For quick testing
     # Get the project root directory (parent of training directory)
     project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    csv_path = os.path.join(project_root, "outputs", "envo_sweet_training3.csv")
+    csv_path = os.path.join(project_root, "outputs", "envo_sweet_training4.csv")
     
     df = pd.read_csv(csv_path)
     # df = pd.read_csv("outputs/envo_sweet_training3.csv")
 
     df_train, df_val, df_test = stratified_split(df, val_size=0.2, test_size=0.2)
 
-    model = train_bi_encoder(df_train, df_val, df_test, num_epochs=2)
+    model = train_bi_encoder(df_train, df_val, df_test, num_epochs=7)
 
+    # Creazione dello studio Optuna
+    # 'maximize' perché vogliamo massimizzare l'Average Precision
+    # study = optuna.create_study(direction="maximize")
+    
+    # Avviamo l'ottimizzazione (es. 10 tentativi)
+    # study.optimize(lambda trial: objective(trial, df_train, df_val), n_trials=10)

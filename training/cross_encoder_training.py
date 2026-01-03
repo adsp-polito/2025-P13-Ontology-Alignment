@@ -4,6 +4,7 @@ from sklearn.metrics import accuracy_score, f1_score, precision_score, recall_sc
 import pandas as pd
 import os
 import wandb
+import optuna
 from .utils import stratified_split, convert_df_to_dataset
 
 def evaluate_cross_encoder(
@@ -51,34 +52,58 @@ def print_metrics(
         print(f"{k}: {v:.4f}")
 
 
-def find_best_threshold(
-      model: CrossEncoder,
-      df_val: pd.DataFrame,
-      metric: str = "accuracy"
-) -> tuple:
-    """
-    Find the best similarity threshold on the validation set.
+def objective(
+        trial: optuna.Trial,
+        df_train, df_val,
+        model_name="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
+) -> float:
+    # 1. Hyperparameter suggestions
+    # Define the hyperparameter search space
+    lr = trial.suggest_float("learning_rate", 1e-5, 5e-5, log=True)
+    batch_size = trial.suggest_categorical("per_device_train_batch_size", [16, 32])
+    weight_decay = trial.suggest_float("weight_decay", 0.01, 0.1)
+    model = CrossEncoder(model_name)
 
-    Parameters:
-        model (CrossEncoder): cross-encoder model
-        df (pd.DataFrame): validation dataframe
-        metric (str, optional): metric to optimize. Defaults to "accuracy".
+    dataset_train = convert_df_to_dataset(df_train)
+    dataset_val = convert_df_to_dataset(df_val)
+    # dataset_test = convert_df_to_dataset(df_test)
+
+    evaluator = CrossEncoderClassificationEvaluator(
+        sentence_pairs=list(zip(df_val["source_text"], df_val["target_text"])),
+        labels=df_val["match"].astype(int).tolist(),
+        name="val_evaluator"
+    )
     
-    Returns:
-        tuple: best threshold and corresponding metric value
-    """
-  
-    thresholds = [0.5, 0.55, 0.6, 0.65, 0.75, 0.8, 0.85]
-    best_value = -1
-    best_threshold = 0.5
+    model = CrossEncoder(model_name, num_labels=1)
 
-    for threshold in thresholds:
-        metrics = evaluate_cross_encoder(model, df_val, threshold=threshold)
-        if metrics[metric] > best_value:
-            best_value = metrics[metric]
-            best_threshold = threshold
+    # --- 2. Training Arguments con parametri Optuna ---
+    args = SentenceTransformerTrainingArguments(
+        output_dir=f"./optuna_outputs/trial_{trial.number}",
+        num_train_epochs=3, # Teniamo epoche basse per l'ottimizzazione
+        per_device_train_batch_size=batch_size,
+        learning_rate=lr,
+        weight_decay=weight_decay,
+        warmup_steps=100,
+        fp16=True,
+        eval_strategy="no", # Non serve valutare ad ogni epoca durante optuna
+        save_strategy="no",
+        report_to="none"    # Disattiviamo wandb durante i trial per non intasarlo
+    )
 
-    return best_threshold, best_value
+    trainer = SentenceTransformerTrainer(
+        model=model,
+        args=args,
+        train_dataset=dataset_train,
+        loss=train_loss,
+    )
+
+    trainer.train()
+
+    # 3. Evaluation on validation set
+    eval_results = evaluator(model)
+    # BinaryClassificationEvaluator restituisce un float (solitamente Average Precision)
+    print(evaluator.primary_metric)
+    return eval_results[evaluator.primary_metric]
 
 
 def train_cross_encoder(
@@ -132,6 +157,8 @@ def train_cross_encoder(
         per_device_train_batch_size=16,
         per_device_eval_batch_size=16,
         warmup_steps=100,
+        # learning_rate=4.5478115144492107e-05, TODO
+        # weight_decay=0.06977755733111396, TODO
         
         # --- WandB Logging Configuration---
         report_to="wandb",  # Enable logging to WandB
@@ -162,26 +189,24 @@ def train_cross_encoder(
 
     wandb.finish()
 
-    # Evaluate on validation set using default threshold 0.75
-    print("Validation metrics: ")
-    metrics = evaluate_cross_encoder(model, df_val, threshold=0.75)
-    print_metrics(metrics)
+    # Evaluate the model on the validation set
+    final_results = evaluator(model)
     
-    # Find best threshold
-    best_threshold, best_value = find_best_threshold(model, df_val, metric="accuracy")
-    print(f"Best threshold on validation set: {best_threshold} with {best_value:.4f} accuracy")
+    # Best threshold
+    metric = f"{evaluator.name}_accuracy_threshold"
+    best_threshold = final_results[metric]
+    print(f"Best threshold for metric {metric}: {best_threshold}")
+
+    metrics_val = evaluate_cross_encoder(model, df_test, threshold=best_threshold)
+    print(f"Validation metrics at best threshold {best_threshold}:")
 
     # Test best threshold on test set
     metrics_test = evaluate_cross_encoder(model, df_test, threshold=best_threshold)
-    print("Test metrics at best threshold:")
+    print(f"Test metrics at best threshold {best_threshold}:")
     print_metrics(metrics_test)
     
     model.save(output_dir + "/final_cross_encoder_model")
 
-def sample_type(x):
-    if x<683: return "positive"
-    if x<1024: return "hard_negative"
-    return "random_negative"
 
 if __name__ == "__main__": # For quick testing
     # Get the project root directory (parent of training directory)
@@ -193,3 +218,10 @@ if __name__ == "__main__": # For quick testing
     df_train, df_val, df_test = stratified_split(df, val_size=0.2, test_size=0.2)
 
     model = train_cross_encoder(df_train, df_val, df_test, num_epochs=2)
+
+    # Creation of Optuna study
+    # 'maximize' because we want to maximize the Average Precision
+    # study = optuna.create_study(direction="maximize")
+    
+    # Start optimization (10 trials)
+    # study.optimize(lambda trial: objective(trial, df_train, df_val), n_trials=10)

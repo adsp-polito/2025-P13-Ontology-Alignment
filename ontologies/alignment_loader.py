@@ -5,7 +5,8 @@ from typing import Optional
 def load_alignment_file(
         path: str,
         source_iri_prefix: Optional[str] = None,
-        target_iri_prefix: Optional[str] = None
+        target_iri_prefix: Optional[str] = None,
+        namespace: Optional[str] = "http://knowledgeweb.semanticweb.org/heterogeneity/alignment"
 ) -> pd.DataFrame:
     """
     Load a reference alignment file in RDF format and return a DataFrame
@@ -18,18 +19,18 @@ def load_alignment_file(
     """
     graph = Graph()
     graph.parse(path)
-    ALIGN = Namespace("http://knowledgeweb.semanticweb.org/heterogeneity/")
+    ALIGN = Namespace(namespace)
     alignments = []
-    for cell in graph.subjects(RDF.type, ALIGN.alignmentCell):
-        e1 = str(graph.value(cell, ALIGN.alignmententity1)) # envo entity
-        e2 = str(graph.value(cell, ALIGN.alignmententity2)) # sweet entity
+    for cell in graph.subjects(RDF.type, ALIGN.Cell):
+        e1 = str(graph.value(cell, ALIGN.entity1)) # envo entity
+        e2 = str(graph.value(cell, ALIGN.entity2)) # sweet entity
         if (source_iri_prefix and not e1.startswith(source_iri_prefix)) or \
               (target_iri_prefix and not e2.startswith(target_iri_prefix)):
             continue
         # measure = graph.value(cell, ALIGN.alignmentmeasure)
         alignments.append({
-            "source_iri": e2, # less informative ontology as source
-            "target_iri": e1, # more informative ontology as target
+            "source_iri": e1, # less informative ontology as source
+            "target_iri": e2, # more informative ontology as target
             # "label": float(measure) if measure is not None else None,
             "sample_type": "positive", 
             "match": 1
