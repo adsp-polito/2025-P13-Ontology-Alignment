@@ -5,6 +5,7 @@ import pandas as pd
 import os
 import wandb
 import optuna
+import torch
 from .utils import stratified_split, convert_df_to_dataset
 
 def evaluate_cross_encoder(
@@ -52,21 +53,30 @@ def print_metrics(
         print(f"{k}: {v:.4f}")
 
 
-def objective(
+def cross_objective(
         trial: optuna.Trial,
         df_train, df_val,
         model_name="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
 ) -> float:
+    """
+    Hyperparameter optimization objective function for cross-encoder model.
+
+    Parameters:
+        trial (optuna.Trial): Optuna trial object
+        df_train (pd.DataFrame): training dataframe
+        df_val (pd.DataFrame): validation dataframe
+        model_name (str, optional): pre-trained model name. Defaults to "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb".
+
+    Returns:
+        float: validation metric to maximize (e.g., average precision)
+    """
     # 1. Hyperparameter suggestions
     # Define the hyperparameter search space
     lr = trial.suggest_float("learning_rate", 1e-5, 5e-5, log=True)
     batch_size = trial.suggest_categorical("per_device_train_batch_size", [16, 32])
     weight_decay = trial.suggest_float("weight_decay", 0.01, 0.1)
-    model = CrossEncoder(model_name)
 
     dataset_train = convert_df_to_dataset(df_train)
-    dataset_val = convert_df_to_dataset(df_val)
-    # dataset_test = convert_df_to_dataset(df_test)
 
     evaluator = CrossEncoderClassificationEvaluator(
         sentence_pairs=list(zip(df_val["source_text"], df_val["target_text"])),
@@ -74,10 +84,11 @@ def objective(
         name="val_evaluator"
     )
     
-    model = CrossEncoder(model_name, num_labels=1)
-
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = CrossEncoder(model_name, num_labels=1).to(device)
+    
     # --- 2. Training Arguments con parametri Optuna ---
-    args = SentenceTransformerTrainingArguments(
+    args = CrossEncoderTrainingArguments(
         output_dir=f"./optuna_outputs/trial_{trial.number}",
         num_train_epochs=3, # Teniamo epoche basse per l'ottimizzazione
         per_device_train_batch_size=batch_size,
@@ -90,18 +101,17 @@ def objective(
         report_to="none"    # Disattiviamo wandb durante i trial per non intasarlo
     )
 
-    trainer = SentenceTransformerTrainer(
+    trainer = CrossEncoderTrainer(
         model=model,
         args=args,
-        train_dataset=dataset_train,
-        loss=train_loss,
+        train_dataset=dataset_train
     )
 
     trainer.train()
 
     # 3. Evaluation on validation set
     eval_results = evaluator(model)
-    # BinaryClassificationEvaluator restituisce un float (solitamente Average Precision)
+
     print(evaluator.primary_metric)
     return eval_results[evaluator.primary_metric]
 
@@ -110,6 +120,9 @@ def train_cross_encoder(
         df_train: pd.DataFrame,
         df_val: pd.DataFrame,
         df_test: pd.DataFrame,
+        batch_size: int = 8,
+        learning_rate: float = 5e-5,
+        weight_decay: float = 0.0,
         num_epochs: int = 10,
         model_name: str ="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
         project_name: str ="cross-encoder-alignment",
@@ -132,6 +145,8 @@ def train_cross_encoder(
     dataset_val = convert_df_to_dataset(df_val)
     # dataset_test = convert_df_to_dataset(df_test)
 
+    warmup_steps = int(0.1 * len(dataset_train) / batch_size)
+
     evaluator = CrossEncoderClassificationEvaluator(
         sentence_pairs=list(zip(df_val["source_text"], df_val["target_text"])),
         labels=df_val["match"].astype(int).tolist(),
@@ -143,22 +158,26 @@ def train_cross_encoder(
     wandb.init(project=project_name, config={
         "model_name": model_name,
         "epochs": num_epochs,
-        "batch_size": 16,
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "warmup_steps": warmup_steps,
         "train_size": len(df_train),
         "val_size": len(df_val)
     })
     # -------------------------------------------------------
     
-    model = CrossEncoder(model_name, num_labels=1)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = CrossEncoder(model_name, num_labels=1).to(device)
 
     args = CrossEncoderTrainingArguments(
         output_dir=output_dir,
         num_train_epochs=int(num_epochs),
-        per_device_train_batch_size=16,
-        per_device_eval_batch_size=16,
-        warmup_steps=100,
-        # learning_rate=4.5478115144492107e-05, TODO
-        # weight_decay=0.06977755733111396, TODO
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        warmup_steps=warmup_steps,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
         
         # --- WandB Logging Configuration---
         report_to="wandb",  # Enable logging to WandB
@@ -168,7 +187,7 @@ def train_cross_encoder(
         save_strategy="epoch",       # Save checkpoint after each epoch
         save_total_limit=2,          # Keep only the last 2 checkpoints
         load_best_model_at_end=True, # Load best model when finished training
-        metric_for_best_model="eval_val_evaluator_average_precision", # Nome loggato dall'evaluator
+        metric_for_best_model="eval_val_evaluator_average_precision", # Name of the metric to use to compare two different models
         greater_is_better=True,
         
         # --- Optimization ---
@@ -197,8 +216,9 @@ def train_cross_encoder(
     best_threshold = final_results[metric]
     print(f"Best threshold for metric {metric}: {best_threshold}")
 
-    metrics_val = evaluate_cross_encoder(model, df_test, threshold=best_threshold)
+    metrics_val = evaluate_cross_encoder(model, df_val, threshold=best_threshold)
     print(f"Validation metrics at best threshold {best_threshold}:")
+    print_metrics(metrics_val)
 
     # Test best threshold on test set
     metrics_test = evaluate_cross_encoder(model, df_test, threshold=best_threshold)
@@ -206,22 +226,3 @@ def train_cross_encoder(
     print_metrics(metrics_test)
     
     model.save(output_dir + "/final_cross_encoder_model")
-
-
-if __name__ == "__main__": # For quick testing
-    # Get the project root directory (parent of training directory)
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    csv_path = os.path.join(project_root, "outputs", "envo_sweet_training.csv")
-    
-    df = pd.read_csv(csv_path)
-
-    df_train, df_val, df_test = stratified_split(df, val_size=0.2, test_size=0.2)
-
-    model = train_cross_encoder(df_train, df_val, df_test, num_epochs=2)
-
-    # Creation of Optuna study
-    # 'maximize' because we want to maximize the Average Precision
-    # study = optuna.create_study(direction="maximize")
-    
-    # Start optimization (10 trials)
-    # study.optimize(lambda trial: objective(trial, df_train, df_val), n_trials=10)

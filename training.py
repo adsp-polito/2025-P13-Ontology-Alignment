@@ -3,12 +3,14 @@ from pathlib import Path
 
 import argparse
 import pandas as pd
+import torch
 
 from ontologies.facade import ontology_loader, SourceTextConfig
 from ontologies.alignment_loader import load_alignment_file
 from data.dataset_builder import build_training_dataset
 from visualization.alignment_visualization import visualize_alignments
-from training.train import train_model
+from training.train import train_model, optimize_model
+from training.utils import stratified_split
 
 def parse_args() -> argparse.Namespace:
     """
@@ -128,6 +130,40 @@ def parse_args() -> argparse.Namespace:
     )
 
     parser.add_argument(
+        "--learning-rate",
+        type=float,
+        default=5e-5,
+        help="Learning rate for training (ignored if --tune is used)"
+    )
+
+    parser.add_argument(
+        "--batch-size",
+        type=int,
+        default=8,
+        help="Batch size for training (ignored if --tune is used)"
+    )
+
+    parser.add_argument(
+        "--weight-decay",
+        type=float,
+        default=0.0,
+        help="Weight decay for training (ignored if --tune is used)"
+    )
+
+    parser.add_argument(
+    "--tune",
+    action="store_true",
+    help="Enable hyperparameter tuning with Optuna before final training"
+    
+    )
+    parser.add_argument(
+        "--n-trials",
+        type=int,
+        default=10,
+        help="Number of trials for Optuna optimization"
+    )
+
+    parser.add_argument(
         "--num-epochs",
         type=int,
         default=10,
@@ -211,13 +247,41 @@ def main() -> None:
     
     if args.model_type and args.model_name and args.model_output_dir:
 
+        training_params = {
+            "learning_rate": args.learning_rate,
+            "batch_size": args.batch_size,
+            "weight_decay": args.weight_decay
+        }
+
+        df_train, df_val, df_test = stratified_split(df_training_final)
+
+        if args.tune:
+            if torch.cuda.is_available():
+                print(f"Using GPU: {torch.cuda.get_device_name(0)} for training.")
+            print(f"--- Running {args.model_type} Hyperparameter Optimization ---")
+
+            best_params = optimize_model(
+                df_train=df_train,
+                df_val=df_val,
+                model_type=args.model_type,
+                model_name=args.model_name,
+                n_trials=args.n_trials
+            )
+
+            training_params.update(best_params)
+            
         print(f"--- Running {args.model_type} Training ---")
 
         train_model(
-            df_training=df_training_final,
+            df_train=df_train,
+            df_val=df_val,
+            df_test=df_test,
             model_type=args.model_type,
             model_name=args.model_name,
             output_dir=args.model_output_dir,
+            batch_size=training_params["batch_size"],
+            learning_rate=training_params["learning_rate"],
+            weight_decay=training_params["weight_decay"],
             num_epochs=args.num_epochs
         )
 
@@ -225,3 +289,31 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
+    # cmd for training only:
+    # python training.py --mode train-only --tune --dataset-csv outputs/envo_sweet_training4.csv --model-type cross-encoder --model-name "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb" --model-output-dir outputs/cross_encoder_model --num-epochs 10 --n-trials 20
+
+    # cmd for training only with fixed hyperparameters:
+    # python training.py --mode train-only --dataset-csv outputs/envo_sweet_training4.csv --model-type bi-encoder --model-name "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb" --model-output-dir outputs/bi_encoder_model --learning-rate 3e-5 --batch-size 16 --weight-decay 0.01 --num-epochs 5
+
+    # python training.py --mode train-only --dataset-csv outputs/envo_sweet_training4.csv --model-type bi-encoder --model-name microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext --model-output-dir outputs/bi_encoder_model --learning-rate 3e-5 --batch-size 16 --weight-decay 0.01 --num-epochs 5
+
+    # python training.py --mode train-only --dataset-csv outputs/envo_sweet_training4.csv --model-type bi-encoder --model-name allenai/scibert_scivocab_uncased --model-output-dir outputs/bi_encoder_model --learning-rate 3e-5 --batch-size 16 --weight-decay 0.01 --num-epochs 5
+
+    # python training.py --mode train-only --dataset-csv outputs/envo_sweet_training4.csv --model-type bi-encoder --model-name bert-base-uncased --model-output-dir outputs/bi_encoder_model --learning-rate 3e-5 --batch-size 16 --weight-decay 0.01 --num-epochs 5
+
+    # python training.py --mode train-only --dataset-csv outputs/envo_sweet_training4.csv --model-type cross-encoder --model-name microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext --model-output-dir outputs/cross_encoder_model --learning-rate 3e-5 --batch-size 16 --weight-decay 0.01 --num-epochs 5
+
+    # Model ids:
+    # "pubmedbert": "microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext",
+    # "scibert": "allenai/scibert_scivocab_uncased",
+    # "bert_base": "bert-base-uncased"
+
+    # Best trial for pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb cross-encoder:
+    # Trial 12 with value: 0.9905706770964808 and parameters: {'learning_rate': 4.888675913578744e-05, 'per_device_train_batch_size': 16, 'weight_decay': 0.013361488403257422}
+    # Threshold: 0.996262788772583
+
+    # Best trial for microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext cross-encoder:
+    # Trial 11 finished with value: 0.985108110261664 and parameters: {'learning_rate': 3.88576637411787e-05, 'per_device_train_batch_size': 32, 'weight_decay': 0.015394984787971381}. Best is trial 11 with value: 0.985108110261664.
+    # Threshold: 0.013183257542550564
+
+    # python training.py --mode train-only --dataset-csv outputs/envo_sweet_training4.csv --model-type cross-encoder --model-name microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext --model-output-dir outputs/cross_encoder_model_PubMedBERT --learning-rate 3.88576637411787e-05 --batch-size 32 --weight-decay 0.015394984787971381 --num-epochs 10

@@ -8,3 +8,4 @@ pyvis==0.3.2
 networkx==3.6.1
 datasets==4.4.2
 accelerate==1.12.0
+optuna==4.6.0

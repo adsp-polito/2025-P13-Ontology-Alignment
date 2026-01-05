@@ -7,7 +7,8 @@ import pandas as pd
 import os
 import wandb
 import optuna
-from .utils import stratified_split, convert_df_to_dataset
+import torch
+from .utils import convert_df_to_dataset
 
 def evaluate_bi_encoder(
         model: SentenceTransformer,
@@ -56,7 +57,7 @@ def print_metrics(
         print(f"{k}: {v:.4f}")
 
 
-def objective(
+def bi_objective(
         trial: optuna.Trial,
         df_train, df_val,
         model_name="pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
@@ -78,7 +79,9 @@ def objective(
     lr = trial.suggest_float("learning_rate", 1e-5, 5e-5, log=True)
     batch_size = trial.suggest_categorical("per_device_train_batch_size", [16, 32])
     weight_decay = trial.suggest_float("weight_decay", 0.01, 0.1)
-    model = SentenceTransformer(model_name)
+
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = SentenceTransformer(model_name).to(device)
 
     dataset_train = convert_df_to_dataset(df_train)
 
@@ -95,15 +98,15 @@ def objective(
     # --- 2. Training Arguments con parametri Optuna ---
     args = SentenceTransformerTrainingArguments(
         output_dir=f"./optuna_outputs/trial_{trial.number}",
-        num_train_epochs=3, # Teniamo epoche basse per l'ottimizzazione
+        num_train_epochs=3, # Lower epochs for faster optimization
         per_device_train_batch_size=batch_size,
         learning_rate=lr,
         weight_decay=weight_decay,
         warmup_steps=100,
         fp16=True,
-        eval_strategy="no", # Non serve valutare ad ogni epoca durante optuna
+        eval_strategy="no",
         save_strategy="no",
-        report_to="none"    # Disattiviamo wandb durante i trial per non intasarlo
+        report_to="none"
     )
 
     trainer = SentenceTransformerTrainer(
@@ -117,7 +120,7 @@ def objective(
 
     # 3. Evaluation on validation set
     eval_results = evaluator(model)
-    # BinaryClassificationEvaluator restituisce un float (solitamente Average Precision)
+
     print(evaluator.primary_metric)
     return eval_results[evaluator.primary_metric]
 
@@ -125,6 +128,9 @@ def train_bi_encoder(
         df_train: pd.DataFrame,
         df_val: pd.DataFrame,
         df_test: pd.DataFrame,
+        batch_size: int = 8,
+        learning_rate: float = 5e-5,
+        weight_decay: float = 0.0,
         num_epochs: int = 10,
         model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
         project_name: str = "bi-encoder-alignment",
@@ -146,19 +152,25 @@ def train_bi_encoder(
     dataset_train = convert_df_to_dataset(df_train)
     dataset_val = convert_df_to_dataset(df_val)
     # dataset_test = convert_df_to_dataset(df_test)
+
+    warmup_steps = int(0.1 * len(dataset_train) / batch_size)
     
     # 1. WandB Initialization
     # -------------------------------------------------------
     wandb.init(project=project_name, config={
         "model_name": model_name,
         "epochs": num_epochs,
-        "batch_size": 16,
+        "batch_size": batch_size,
+        "learning_rate": learning_rate,
+        "weight_decay": weight_decay,
+        "warmup_steps": warmup_steps,
         "train_size": len(df_train),
         "val_size": len(df_val)
     })
     # -------------------------------------------------------
 
-    model = SentenceTransformer(model_name)
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    model = SentenceTransformer(model_name).to(device)
 
     # Create evaluator for validation set
     evaluator = BinaryClassificationEvaluator(
@@ -175,11 +187,11 @@ def train_bi_encoder(
     args = SentenceTransformerTrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
-        per_device_train_batch_size=32,
-        per_device_eval_batch_size=32,
-        warmup_steps=100,
-        learning_rate=4.5478115144492107e-05,
-        weight_decay=0.06977755733111396,
+        per_device_train_batch_size=batch_size,
+        per_device_eval_batch_size=batch_size,
+        warmup_steps=warmup_steps,
+        learning_rate=learning_rate,
+        weight_decay=weight_decay,
         
         # --- WandB Logging Configuration---
         report_to="wandb",
@@ -221,32 +233,13 @@ def train_bi_encoder(
     best_threshold = final_results[metric]
     print(f"Best threshold for metric {metric}: {best_threshold}")
 
-    metrics_val = evaluate_bi_encoder(model, df_test, threshold=best_threshold)
+    metrics_val = evaluate_bi_encoder(model, df_val, threshold=best_threshold)
     print(f"Validation metrics at best threshold {best_threshold}:")
+    print_metrics(metrics_val)
 
     # Test best threshold on test set
     metrics_test = evaluate_bi_encoder(model, df_test, threshold=best_threshold)
     print(f"Test metrics at best threshold {best_threshold}:")
     print_metrics(metrics_test)
 
-    model.save(output_dir + "/final_bi_encoder_model")
-
-
-if __name__ == "__main__": # For quick testing
-    # Get the project root directory (parent of training directory)
-    project_root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    csv_path = os.path.join(project_root, "outputs", "envo_sweet_training4.csv")
-    
-    df = pd.read_csv(csv_path)
-    # df = pd.read_csv("outputs/envo_sweet_training3.csv")
-
-    df_train, df_val, df_test = stratified_split(df, val_size=0.2, test_size=0.2)
-
-    model = train_bi_encoder(df_train, df_val, df_test, num_epochs=7)
-
-    # Creazione dello studio Optuna
-    # 'maximize' perché vogliamo massimizzare l'Average Precision
-    # study = optuna.create_study(direction="maximize")
-    
-    # Avviamo l'ottimizzazione (es. 10 tentativi)
-    # study.optimize(lambda trial: objective(trial, df_train, df_val), n_trials=10)
+    model.save(output_dir + "/final_bi_encoder_model") 
