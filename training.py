@@ -10,7 +10,7 @@ from ontologies.alignment_loader import load_alignment_file
 from data.dataset_builder import build_training_dataset
 from visualization.alignment_visualization import visualize_alignments
 from training.train import train_model, optimize_model
-from training.utils import stratified_split
+from training.utils import save_split_and_eval_artifacts, stratified_split
 
 def parse_args() -> argparse.Namespace:
     """
@@ -202,14 +202,16 @@ def main() -> None:
             raise FileNotFoundError(f"Dataset CSV not found: {p}")
 
         df_training_final = pd.read_csv(p)
-        df_train = df_training_final
-        df_val = None
-        df_test = None
 
         required_cols = {"source_text", "target_text", "match"}
         missing = required_cols - set(df_training_final.columns)
         if missing:
             raise ValueError(f"Dataset CSV missing required columns: {sorted(missing)}")
+        # No validation/test splits in train-only mode
+        df_train = df_training_final
+        df_val = None
+        df_test = None
+
     else:   
         src_text_cfg = SourceTextConfig(
             use_label=True,
@@ -267,19 +269,21 @@ def main() -> None:
 
         df_train, df_val, df_test = stratified_split(df_training_final, split_ratios=split_ratios, seed=42)
 
+        paths = save_split_and_eval_artifacts(
+            args.out_dataset,
+            df_train=df_train,
+            df_val=df_val,
+            df_test=df_test,
+        )
+
         if args.mode == "build-dataset":
-            base = Path(args.out_dataset)
-            stem = base.with_suffix("")
-
-            df_train.to_csv(stem.with_suffix(".train.csv"), index=False)
-            df_val.to_csv(stem.with_suffix(".val.csv"), index=False)
-            df_test.to_csv(stem.with_suffix(".test.csv"), index=False)
-
             print("Dataset built and split saved:")
-            print(f" - {stem}.train.csv")
-            print(f" - {stem}.val.csv")
-            print(f" - {stem}.test.csv")
-
+            print(" -", paths["train"])
+            print(" -", paths["val"])
+            print(" -", paths["test"])
+            print("Inference/eval artifacts (Option B):")
+            print(" -", paths["queries"], "(input for inference)")
+            print(" -", paths["gold"], "(gold for evaluation)")
             print("Dataset built. Exiting (mode=build-dataset).")
             return
             
@@ -295,7 +299,9 @@ def main() -> None:
             if torch.cuda.is_available():
                 print(f"Using GPU: {torch.cuda.get_device_name(0)} for training.")
             print(f"--- Running {args.model_type} Hyperparameter Optimization ---")
-
+            if df_val is None or len(df_val)==0:
+                raise ValueError("df_val is required for hyperparameter tuning.")
+            
             best_params = optimize_model(
                 df_train=df_train,
                 df_val=df_val,

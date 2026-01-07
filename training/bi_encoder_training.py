@@ -1,3 +1,4 @@
+from __future__ import annotations
 from sentence_transformers import SentenceTransformer, SentenceTransformerTrainer, SentenceTransformerTrainingArguments
 from sentence_transformers.evaluation import BinaryClassificationEvaluator
 from sentence_transformers.losses import OnlineContrastiveLoss
@@ -9,6 +10,9 @@ import wandb
 import optuna
 import torch
 from .utils import convert_df_to_dataset
+from typing import Optional
+from pathlib import Path
+
 
 def evaluate_bi_encoder(
         model: SentenceTransformer,
@@ -124,39 +128,38 @@ def bi_objective(
     print(evaluator.primary_metric)
     return eval_results[evaluator.primary_metric]
 
-def train_bi_encoder(
-        df_train: pd.DataFrame,
-        df_val: pd.DataFrame,
-        df_test: pd.DataFrame,
-        batch_size: int = 8,
-        learning_rate: float = 5e-5,
-        weight_decay: float = 0.0,
-        num_epochs: int = 10,
-        model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
-        project_name: str = "bi-encoder-alignment",
-        output_dir: str = "outputs/bi_encoder_model"
-) -> None:
-    """Train a bi-encoder model using the provided training, validation, and test dataframes.
 
-    Parameters:
-        df_train (pd.DataFrame): training dataframe
-        df_val (pd.DataFrame): validation dataframe
-        df_test (pd.DataFrame): test dataframe
-        num_epochs (int, optional): number of training epochs. Defaults to 10.
-        model_name (str, optional): pre-trained model name. Defaults to "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb".
-    
-    Returns:
-        SentenceTransformer: fine-tuned bi-encoder model
+def train_bi_encoder(
+    df_train: pd.DataFrame,
+    df_val: Optional[pd.DataFrame],
+    df_test: Optional[pd.DataFrame],
+    batch_size: int = 8,
+    learning_rate: float = 5e-5,
+    weight_decay: float = 0.0,
+    num_epochs: int = 10,
+    model_name: str = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb",
+    project_name: str = "bi-encoder-alignment",
+    output_dir: str = "outputs/bi_encoder_model"
+) -> None:
+    """
+    Train a bi-encoder model. df_val/df_test can be None (train-only mode).
     """
 
+    if df_train is None or len(df_train) == 0:
+        raise ValueError("df_train is empty.")
+
+    has_val = df_val is not None and len(df_val) > 0
+    has_test = df_test is not None and len(df_test) > 0
+
+    output_dir = str(output_dir)
+    Path(output_dir).mkdir(parents=True, exist_ok=True)
+
     dataset_train = convert_df_to_dataset(df_train)
-    dataset_val = convert_df_to_dataset(df_val)
-    # dataset_test = convert_df_to_dataset(df_test)
+    dataset_val = convert_df_to_dataset(df_val) if has_val else None
 
     warmup_steps = int(0.1 * len(dataset_train) / batch_size)
-    
-    # 1. WandB Initialization
-    # -------------------------------------------------------
+
+    # ---- WandB (logga solo sizes che esistono)
     wandb.init(project=project_name, config={
         "model_name": model_name,
         "epochs": num_epochs,
@@ -165,25 +168,28 @@ def train_bi_encoder(
         "weight_decay": weight_decay,
         "warmup_steps": warmup_steps,
         "train_size": len(df_train),
-        "val_size": len(df_val)
+        "val_size": (len(df_val) if has_val else 0),
+        "test_size": (len(df_test) if has_test else 0),
+        "has_val": has_val,
+        "has_test": has_test,
     })
-    # -------------------------------------------------------
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     model = SentenceTransformer(model_name).to(device)
 
-    # Create evaluator for validation set
-    evaluator = BinaryClassificationEvaluator(
-        sentences1=df_val["source_text"].tolist(),
-        sentences2=df_val["target_text"].tolist(),
-        labels=df_val["match"].astype(int).tolist(),
-        name="val_bi_encoder"
-    )
+    # Evaluator solo se val esiste
+    evaluator = None
+    if has_val:
+        evaluator = BinaryClassificationEvaluator(
+            sentences1=df_val["source_text"].tolist(),
+            sentences2=df_val["target_text"].tolist(),
+            labels=df_val["match"].astype(int).tolist(),
+            name="val_bi_encoder"
+        )
 
-    # Define the loss function
     train_loss = OnlineContrastiveLoss(model)
 
-    # 5. Training Arguments
+    # Se non hai val: niente eval/best-model logic
     args = SentenceTransformerTrainingArguments(
         output_dir=output_dir,
         num_train_epochs=num_epochs,
@@ -192,54 +198,49 @@ def train_bi_encoder(
         warmup_steps=warmup_steps,
         learning_rate=learning_rate,
         weight_decay=weight_decay,
-        
-        # --- WandB Logging Configuration---
+
         report_to="wandb",
         run_name="bi-encoder-training",
         logging_steps=10,
-        eval_strategy="epoch",
-        save_strategy="epoch",
-        save_total_limit=2,
-        load_best_model_at_end=True,
-        metric_for_best_model="eval_val_bi_encoder_cosine_ap",
-        greater_is_better=True,
-        
-        # --- Optimization ---
-        fp16=True,
 
+        eval_strategy=("epoch" if has_val else "no"),
+        save_strategy=("epoch" if has_val else "no"),
+        save_total_limit=(2 if has_val else 0),
+
+        load_best_model_at_end=(True if has_val else False),
+        metric_for_best_model=("eval_val_bi_encoder_cosine_ap" if has_val else None),
+        greater_is_better=True,
+
+        fp16=True,
         remove_unused_columns=True
-        
     )
 
-    # 6. Trainer
     trainer = SentenceTransformerTrainer(
         model=model,
         args=args,
         train_dataset=dataset_train,
-        eval_dataset=dataset_val,
+        eval_dataset=(dataset_val if has_val else None),
         loss=train_loss,
         evaluator=evaluator
     )
 
     trainer.train()
-
     wandb.finish()
 
-    # Evaluate the model on the validation set
-    final_results = evaluator(model)
-    
-    # Best threshold
-    metric = f"{evaluator.name}_cosine_accuracy_threshold"
-    best_threshold = final_results[metric]
-    print(f"Best threshold for metric {metric}: {best_threshold}")
+    if has_val:
+        final_results = evaluator(model)
+        metric = f"{evaluator.name}_cosine_accuracy_threshold"
+        best_threshold = final_results[metric]
+        print(f"Best threshold for metric {metric}: {best_threshold}")
 
-    metrics_val = evaluate_bi_encoder(model, df_val, threshold=best_threshold)
-    print(f"Validation metrics at best threshold {best_threshold}:")
-    print_metrics(metrics_val)
+        metrics_val = evaluate_bi_encoder(model, df_val, threshold=best_threshold)
+        print("Validation metrics:")
+        print_metrics(metrics_val)
 
-    # Test best threshold on test set
-    metrics_test = evaluate_bi_encoder(model, df_test, threshold=best_threshold)
-    print(f"Test metrics at best threshold {best_threshold}:")
-    print_metrics(metrics_test)
+        if has_test:
+            metrics_test = evaluate_bi_encoder(model, df_test, threshold=best_threshold)
+            print("Test metrics:")
+            print_metrics(metrics_test)
+            pass
 
-    model.save(output_dir + "/final_bi_encoder_model") 
+    model.save(str(Path(output_dir) / "final_bi_encoder_model"))
