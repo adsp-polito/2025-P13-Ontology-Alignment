@@ -479,6 +479,7 @@ class CandidateRetriever:
         semantic_top_k: int = 100,
         merged_top_k: int = 150,
         hybrid_ratio_semantic: float = 0.5,
+        semantic_text: Optional[str] = None,   # NEW
     ) -> Tuple[List[Candidate], str]:
         """
         Retrieve candidates for ONE attribute.
@@ -505,6 +506,9 @@ class CandidateRetriever:
         if exact:
             return exact, "exact"
 
+        semantic_query = attr_text if semantic_text is None else str(semantic_text)
+        semantic_query = semantic_query.strip()
+
         # 2) Lexical retrieval
         lex = lexical_candidates(
             attr_text,
@@ -522,7 +526,7 @@ class CandidateRetriever:
                 return [], "none"
 
             sem = semantic_candidates(
-                attr_text,
+                semantic_query,
                 bundle=self.bundle,
                 encoder=self.semantic_encoder,
                 top_k=int(semantic_top_k_eff),
@@ -537,7 +541,7 @@ class CandidateRetriever:
         lex_cut = lex[:k_lex] if k_lex > 0 else []
 
         sem = semantic_candidates(
-            attr_text,
+            semantic_query,
             bundle=self.bundle,
             encoder=self.semantic_encoder,
             top_k=semantic_top_k_eff,
@@ -557,7 +561,7 @@ class CandidateRetriever:
 
     def retrieve_batch(
         self,
-        attr_texts: Sequence[str],
+        retrieval_texts: Sequence[str],
         *,
         mode: str,
         lexical_top_k: int = 100,
@@ -565,6 +569,7 @@ class CandidateRetriever:
         merged_top_k: int = 150,
         hybrid_ratio_semantic: float = 0.5,
         semantic_batch_size: Optional[int] = None,
+        semantic_texts: Optional[Sequence[str]] = None,   # NEW
     ) -> Tuple[List[List[Candidate]], List[str]]:
         """
         Batch retrieval across many attributes.
@@ -576,6 +581,15 @@ class CandidateRetriever:
         Returns:
             (candidates_per_attr, retrieval_source_per_attr)
         """
+        # semantic_texts defaults to retrieval_texts if not provided
+        if semantic_texts is None:
+            semantic_texts = retrieval_texts
+        if len(semantic_texts) != len(retrieval_texts):
+            raise ValueError(
+                f"semantic_texts must have same length as retrieval_texts: "
+                f"{len(semantic_texts)} != {len(retrieval_texts)}"
+            )
+
         mode = str(mode).lower().strip()
         if mode not in {"lexical", "hybrid"}:
             raise ValueError(f"Unsupported retrieval mode: {mode}")
@@ -590,7 +604,7 @@ class CandidateRetriever:
             lexical_top_k_eff = max(lexical_top_k_eff, k_lex)
             semantic_top_k_eff = max(semantic_top_k_eff, k_sem)
 
-        n = len(attr_texts)
+        n = len(retrieval_texts)
         results: List[List[Candidate]] = [[] for _ in range(n)]
         sources: List[str] = ["none" for _ in range(n)]
 
@@ -598,7 +612,7 @@ class CandidateRetriever:
         need_semantic_idx: List[int] = []
 
         # 1) Exact + lexical pass
-        for i, t in enumerate(attr_texts):
+        for i, t in enumerate(retrieval_texts):
             txt = "" if t is None else str(t).strip()
 
             exact = exact_match_candidates(txt, bundle=self.bundle)
@@ -637,7 +651,7 @@ class CandidateRetriever:
         # 2) Semantic batch for needed indices
         if need_semantic_idx:
             bs = int(semantic_batch_size) if semantic_batch_size is not None else self.semantic_batch_size
-            sem_texts = ["" if attr_texts[i] is None else str(attr_texts[i]) for i in need_semantic_idx]
+            sem_texts = ["" if semantic_texts[i] is None else str(semantic_texts[i]).strip() for i in need_semantic_idx]
 
             sem_lists = semantic_candidates_batch(
                 sem_texts,

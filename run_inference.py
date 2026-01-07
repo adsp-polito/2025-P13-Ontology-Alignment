@@ -27,23 +27,6 @@ Key production properties:
       CrossEncoderScorer caches cross-encoder tokenizer + model
   - retrieval is batched (semantic queries encoded in batch)
   - scoring is batched across ALL pairs (chunked) to avoid OOM
-
-Run example:
-  python run_inference.py \
-    --bundle data/offline_bundle.pkl \
-    --ontology-csv data/internal_ontology.csv \
-    --input-csv data/study_attributes.csv \
-    --out-csv data/predictions.csv \
-    --attr-col attribute \
-    --id-col attribute_id \
-    --mode hybrid \
-    --cross-encoder-model-id <YOUR_CE_MODEL> \
-    --cross-batch-size 32 \
-    --retrieval-lexical-top-k 120 \
-    --retrieval-semantic-top-k 120 \
-    --retrieval-merged-top-k 200 \
-    --hybrid-ratio-semantic 0.5 \
-    --keep-top-n 5
 """
 
 from __future__ import annotations
@@ -253,7 +236,8 @@ def run_inference_csv(
     ontology_csv: str | Path,
     input_csv: str | Path,
     out_csv: str | Path,
-    attr_col: str = "attribute",
+    scoring_col: Optional[str] = None,
+    retrieval_col: str = "attribute",
     id_col: Optional[str] = None,
     mode: str = "lexical",  # "lexical" | "hybrid"
     cross_tokenizer_name: str = "dmis-lab/biobert-base-cased-v1.1", # must match offline preprocessing
@@ -285,13 +269,32 @@ def run_inference_csv(
 
     # Load input
     df_in = pd.read_csv(Path(input_csv))
-    if attr_col not in df_in.columns:
-        raise ValueError(f"Input CSV missing attr_col='{attr_col}'. Found columns: {list(df_in.columns)}")
+
+    # Default scoring_col = retrieval_col
+    if scoring_col is None:
+        scoring_col = retrieval_col
+
+    # Validate columns
+    for colname, label in [(retrieval_col, "retrieval_col"), (scoring_col, "scoring_col")]:
+        if colname not in df_in.columns:
+            raise ValueError(f"Input CSV missing {label}='{colname}'. Found columns: {list(df_in.columns)}")
+
     if id_col is not None and id_col not in df_in.columns:
         raise ValueError(f"id_col='{id_col}' not found. Found columns: {list(df_in.columns)}")
 
-    attr_texts: List[str] = [_safe_str(x) for x in df_in[attr_col].tolist()]
-    n = len(attr_texts)
+    retrieval_texts: List[str] = [_safe_str(x) for x in df_in[retrieval_col].tolist()]
+    raw_scoring_texts: List[str] = [_safe_str(x) for x in df_in[scoring_col].tolist()]
+
+    # Cross-encoder fallback rule: use retrieval_text only if scoring_text is empty
+    scoring_texts: List[str] = []
+    for r_txt, s_txt in zip(retrieval_texts, raw_scoring_texts):
+        s_clean = (s_txt or "").strip()
+        if s_clean:
+            scoring_texts.append(s_clean)
+        else:
+            scoring_texts.append((r_txt or "").strip())
+
+    n = len(retrieval_texts)
 
     # Stage A: Retrieval (batch)
     retriever = CandidateRetriever(
@@ -302,13 +305,14 @@ def run_inference_csv(
     )
 
     candidates_per_attr, retrieval_sources = retriever.retrieve_batch(
-        attr_texts,
+        retrieval_texts,
         mode=mode,
         lexical_top_k=int(retrieval_lexical_top_k),
         semantic_top_k=int(retrieval_semantic_top_k),
         merged_top_k=int(retrieval_merged_top_k),
         hybrid_ratio_semantic=float(hybrid_ratio_semantic),
         semantic_batch_size=int(semantic_batch_size),
+        semantic_texts=scoring_texts,
     )
 
     # Stage B: Scoring (batched across ALL (attr, cand) pairs)
@@ -319,7 +323,7 @@ def run_inference_csv(
     )
 
     left, right, meta = build_pairs_for_scoring(
-        attr_texts,
+        scoring_texts,
         candidates_per_attr,
         iri2text=iri2text,
         cross_top_k=int(cross_top_k),
@@ -347,7 +351,7 @@ def run_inference_csv(
                 row["predicted_score"] = None
                 row["num_scored"] = 0
 
-            row["attribute_text"] = attr_texts[i]
+            row["attribute_text"] = scoring_texts[i]
             row["retrieval_source"] = retrieval_sources[i] if i < len(retrieval_sources) else "none"
             row["num_retrieved"] = len(candidates_per_attr[i]) if i < len(candidates_per_attr) else 0
             out_rows.append(row)
@@ -381,7 +385,7 @@ def run_inference_csv(
         else:
             row["row_id"] = int(i)
         
-        row["attribute_text"] = attr_texts[i]
+        row["attribute_text"] = scoring_texts[i]
         row["retrieval_source"] = retrieval_sources[i] if i < len(retrieval_sources) else "none"
         row["num_retrieved"] = len(candidates_per_attr[i]) if i < len(candidates_per_attr) else 0
 
@@ -428,7 +432,19 @@ def parse_args() -> argparse.Namespace:
     p.add_argument("--input-csv", required=True, help="Path to input CSV containing attributes")
     p.add_argument("--out-csv", required=True, help="Path to output predictions CSV")
 
-    p.add_argument("--attr-col", default="attribute", help="Column name for attribute text in input CSV")
+    # New: separate columns for retrieval vs scoring
+    p.add_argument(
+        "--retrieval-col",
+        default="attribute",
+        help="Column name used for retrieval (exact match + lexical). Typically the attribute LABEL.",
+    )
+    p.add_argument(
+        "--scoring-col",
+        default=None,
+        help="Column name used for scoring (cross-encoder) and semantic retrieval (bi-encoder). "
+             "If not provided, defaults to --retrieval-col.",
+    )
+
     p.add_argument("--id-col", default=None, help="Optional identifier column to carry through")
 
     p.add_argument(
@@ -493,7 +509,8 @@ def main() -> None:
         ontology_csv=args.ontology_csv,
         input_csv=args.input_csv,
         out_csv=args.out_csv,
-        attr_col=args.attr_col,
+        retrieval_col=args.retrieval_col,
+        scoring_col=args.scoring_col,
         id_col=args.id_col,
         mode=args.mode,
         cross_tokenizer_name=args.cross_tokenizer_name,
