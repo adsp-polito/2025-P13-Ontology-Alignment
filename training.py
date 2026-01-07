@@ -352,4 +352,16 @@ if __name__ == "__main__":
     # Trial 11 finished with value: 0.985108110261664 and parameters: {'learning_rate': 3.88576637411787e-05, 'per_device_train_batch_size': 32, 'weight_decay': 0.015394984787971381}. Best is trial 11 with value: 0.985108110261664.
     # Threshold: 0.013183257542550564
 
+    # Best trial for allenai/bert-base-uncased cross-encoder:
+    # Trial 15 finished with value: 0.9862592843365305 and parameters: {'learning_rate': 2.162990011733768e-05, 'per_device_train_batch_size': 16, 'weight_decay': 0.051476832668420576}. Best is trial 15 with value: 0.9862592843365305.
+    # Threshold: 0.9634836912155151
+
+    # Best trial for allenai/scibert_scivocab_uncased cross-encoder:
+    # Trial 15 finished with value: 0.993106974191237 and parameters: {'learning_rate': 2.3943273193454225e-05, 'per_device_train_batch_size': 32, 'weight_decay': 0.029606822545270365}. Best is trial 15 with value: 0.993106974191237.
+    # Threshold:
+
+    # Best trial allenai/scibert_scivocab_uncased cross-encoder without hard negatives:
+    # Trial 1 finished with value: 1.0 and parameters: {'learning_rate': 1.2854415975274441e-05, 'per_device_train_batch_size': 16, 'weight_decay': 0.08795585311974417}. Best is trial 1 with value: 1.0.
+    # Threshold: 0.008207633160054684
+
     # python training.py --mode train-only --dataset-csv outputs/envo_sweet_training4.csv --model-type cross-encoder --model-name microsoft/BiomedNLP-PubMedBERT-base-uncased-abstract-fulltext --model-output-dir outputs/cross_encoder_model_PubMedBERT --learning-rate 3.88576637411787e-05 --batch-size 32 --weight-decay 0.015394984787971381 --num-epochs 10

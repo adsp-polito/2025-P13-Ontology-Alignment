@@ -6,3 +6,8 @@ outputs/
 venv/
 wandb/
 lib/
+prova.py
+prova2.py
+datasets/test_split.csv
+datasets/test_split_inference.csv
+datasets/val_split.csv

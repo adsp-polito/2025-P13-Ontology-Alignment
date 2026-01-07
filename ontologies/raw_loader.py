@@ -4,8 +4,37 @@ from owlready2.class_construct import ClassConstruct
 import pandas as pd
 from pathlib import Path
 from urllib.parse import urlparse
+from rdflib import Graph, RDF
+from rdflib.namespace import SKOS, RDFS
+import logging
 
 import re
+
+
+def _suppress_rdflib_datetime_noise() -> None:
+    """Suppress rdflib term casting noise (empty xsd:dateTime, etc.).
+
+    rdflib logs messages like:
+    "Failed to convert Literal lexical form to value ... Invalid isoformat string: ''"
+    repeatedly during parsing or Literal conversion. They are harmless for our
+    usage and just pollute stdout/stderr. This filter turns them off locally.
+    """
+    logger = logging.getLogger("rdflib.term")
+    # Ensure only errors or above are emitted
+    logger.setLevel(logging.ERROR)
+
+    class _DropCastNoise(logging.Filter):
+        def filter(self, record: logging.LogRecord) -> bool:  # type: ignore[override]
+            msg = record.getMessage()
+            if "Failed to convert Literal lexical form to value" in msg:
+                return False
+            if "Invalid isoformat string" in msg:
+                return False
+            return True
+
+    # Prevent propagation to root handlers and add our filter defensively
+    logger.propagate = False
+    logger.addFilter(_DropCastNoise())
 
 def humanize_property_name(name: str) -> str:
     """
@@ -82,144 +111,150 @@ def ontology_classes_to_dataframe(
 
     records: List[Dict[str, Any]] = []
 
-    for cls in onto.classes():
-        # if we only want to filter a certain namespace
-        if class_iri_prefix is not None and not cls.iri.startswith(class_iri_prefix):
-            continue
+    classes = list(onto.classes())
 
-        row: Dict[str, Any] = {}
-
-        row["iri"] = cls.iri
-        row["local_name"] = cls.name  
-
-        # Retrieves the "best label" for the concept
-        labels = getattr(cls, "label", [])
-        if labels:
-            clean_labels = list({lbl.strip() for lbl in labels if lbl.strip()})
-            if clean_labels:
-                row["label"] = clean_labels[0]
-            else:
-                row["label"] = cls.name
-        else:
-            # No available labels: fallback to OWL name
-            row["label"] = cls.name
-        
-        parents = []
-        restrictions = []
-
-        for sup in cls.is_a:
-            if isinstance(sup, ThingClass):
-                # Retrieve the label of the parent class
-                parent_label_list = getattr(sup, "label", [])
-                if parent_label_list:
-                    parent_label = parent_label_list[0].strip()
-                else:
-                    parent_label = humanize_property_name(sup.name)
-
-                parent_label = " ".join(parent_label.lower().split())
-                parents.append(f"sub class of {parent_label}")
-            elif isinstance(sup, ClassConstruct):
-                try:
-                    prop = sup.property
-                    if getattr(prop, "label", []):
-                        prop_label = prop.label[0].strip()
-                    else:
-                        prop_label = humanize_property_name(prop.name)
-                    prop_label = " ".join(prop_label.lower().split())
-
-                    target = sup.value
-                    if getattr(target, "label", []):
-                        target_label = target.label[0].strip()
-                    else:
-                        target_label = humanize_property_name(target.name)
-                    target_label = " ".join(target_label.lower().split())
-
-                    restrictions.append(f"{prop_label}: {target_label}")
-                except Exception:
-                    restrictions.append(str(sup))
-        
-        # Axioms of equivalence and disjointness
-        equiv_str: list[str] = []
-
-        for e in cls.equivalent_to:
-            if isinstance(e, ThingClass):
-                if getattr(e, "label", []):
-                    eq_label = e.label[0].strip()
-                else:
-                    eq_label = humanize_property_name(e.name)
-                eq_label = " ".join(eq_label.lower().split())
-                equiv_str.append(f"equivalent to {eq_label}")
-
-            elif isinstance(e, ClassConstruct):
-                try:
-                    prop = e.property
-                    if getattr(prop, "label", []):
-                        prop_label = prop.label[0].strip()
-                    else:
-                        prop_label = humanize_property_name(prop.name)
-                    prop_label = " ".join(prop_label.lower().split())
-
-                    target = e.value
-                    if getattr(target, "label", []):
-                        target_label = target.label[0].strip()
-                    else:
-                        target_label = humanize_property_name(target.name)
-                    target_label = " ".join(target_label.lower().split())
-
-                    equiv_str.append(f"equivalent to ({prop_label}: {target_label})")
-                except Exception:
-                    equiv_str.append(f"equivalent to {str(e)}")
-
-        disjoint_str: list[str] = []
-
-        for c in cls.disjoints():
-            if isinstance(c, ThingClass):
-                if getattr(c, "label", []):
-                    dj_label = c.label[0].strip()
-                else:
-                    dj_label = humanize_property_name(c.name)
-                dj_label = " ".join(dj_label.lower().split())
-                disjoint_str.append(f"disjoint with {dj_label}")
-            else:
-                disjoint_str.append(f"disjoint with {str(c)}")
-
-        row["parents"] = " | ".join(parents)
-        row["restrictions"] = " | ".join(restrictions)
-        row["equivalent_to"] = " | ".join(equiv_str)
-        row["disjoint_with"] = " | ".join(disjoint_str)
-
-        # Annotation properties: read ALL available ones
-        for ap in annotation_props:
-            values = ap[cls]  # list of values for this annotation property
-            if not values:
+    # If OWL classes exist, keep current behaviour
+    if classes:
+        for cls in classes:
+            if class_iri_prefix is not None and not cls.iri.startswith(class_iri_prefix):
                 continue
-            
-            col_name = anno_name_by_iri[ap.iri]
-            if col_name in {"label", "equivalent_to", "disjoint_with"}:
-                continue
-            
-            str_values = []
-            for v in values:
-                # if v is a OWL entity, try to get its label
-                if hasattr(v, "label") and getattr(v, "label", []):
-                    str_values.append(getattr(v, "label")[0])
-                else:
-                    str_values.append(str(v))
-            
-            row[col_name] = " | ".join(str_values)
-        
-        # Be sure to always have label/comment even if not declared
-        if "label" not in row:
+
+            row: Dict[str, Any] = {}
+            row["iri"] = cls.iri
+            row["local_name"] = cls.name
+
             labels = getattr(cls, "label", [])
             if labels:
-                row["label"] = " | ".join(labels)
-        
-        if "comment" not in row:
-            comments = getattr(cls, "comment", [])
-            if comments:
-                row["comment"] = " | ".join(comments)
+                clean_labels = list({lbl.strip() for lbl in labels if lbl.strip()})
+                row["label"] = clean_labels[0] if clean_labels else cls.name
+            else:
+                row["label"] = cls.name
 
-        records.append(row)
+            parents = []
+            restrictions = []
 
-    df = pd.DataFrame(records).fillna("")
-    return df
+            for sup in cls.is_a:
+                if isinstance(sup, ThingClass):
+                    parent_label_list = getattr(sup, "label", [])
+                    parent_label = parent_label_list[0].strip() if parent_label_list else humanize_property_name(sup.name)
+                    parent_label = " ".join(parent_label.lower().split())
+                    parents.append(f"sub class of {parent_label}")
+                elif isinstance(sup, ClassConstruct):
+                    try:
+                        prop = sup.property
+                        prop_label = prop.label[0].strip() if getattr(prop, "label", []) else humanize_property_name(prop.name)
+                        prop_label = " ".join(prop_label.lower().split())
+
+                        target = sup.value
+                        target_label = target.label[0].strip() if getattr(target, "label", []) else humanize_property_name(target.name)
+                        target_label = " ".join(target_label.lower().split())
+
+                        restrictions.append(f"{prop_label}: {target_label}")
+                    except Exception:
+                        restrictions.append(str(sup))
+
+            equiv_str: list[str] = []
+            for e in cls.equivalent_to:
+                if isinstance(e, ThingClass):
+                    eq_label = e.label[0].strip() if getattr(e, "label", []) else humanize_property_name(e.name)
+                    eq_label = " ".join(eq_label.lower().split())
+                    equiv_str.append(f"equivalent to {eq_label}")
+                elif isinstance(e, ClassConstruct):
+                    try:
+                        prop = e.property
+                        prop_label = prop.label[0].strip() if getattr(prop, "label", []) else humanize_property_name(prop.name)
+                        prop_label = " ".join(prop_label.lower().split())
+
+                        target = e.value
+                        target_label = target.label[0].strip() if getattr(target, "label", []) else humanize_property_name(target.name)
+                        target_label = " ".join(target_label.lower().split())
+
+                        equiv_str.append(f"equivalent to ({prop_label}: {target_label})")
+                    except Exception:
+                        equiv_str.append(f"equivalent to {str(e)}")
+
+            disjoint_str: list[str] = []
+            for c in cls.disjoints():
+                if isinstance(c, ThingClass):
+                    dj_label = c.label[0].strip() if getattr(c, "label", []) else humanize_property_name(c.name)
+                    dj_label = " ".join(dj_label.lower().split())
+                    disjoint_str.append(f"disjoint with {dj_label}")
+                else:
+                    disjoint_str.append(f"disjoint with {str(c)}")
+
+            row["parents"] = " | ".join(parents)
+            row["restrictions"] = " | ".join(restrictions)
+            row["equivalent_to"] = " | ".join(equiv_str)
+            row["disjoint_with"] = " | ".join(disjoint_str)
+
+            for ap in annotation_props:
+                values = ap[cls]
+                if not values:
+                    continue
+
+                col_name = anno_name_by_iri[ap.iri]
+                if col_name in {"label", "equivalent_to", "disjoint_with"}:
+                    continue
+
+                str_values = []
+                for v in values:
+                    if hasattr(v, "label") and getattr(v, "label", []):
+                        str_values.append(getattr(v, "label")[0])
+                    else:
+                        str_values.append(str(v))
+
+                row[col_name] = " | ".join(str_values)
+
+            if "label" not in row:
+                labels = getattr(cls, "label", [])
+                if labels:
+                    row["label"] = " | ".join(labels)
+
+            if "comment" not in row:
+                comments = getattr(cls, "comment", [])
+                if comments:
+                    row["comment"] = " | ".join(comments)
+
+            records.append(row)
+
+        return pd.DataFrame(records).fillna("")
+
+    # No OWL classes: parse as SKOS with rdflib
+    _suppress_rdflib_datetime_noise()
+    g = Graph()
+    g.parse(onto_source)
+
+    for iri in g.subjects(RDF.type, SKOS.Concept):
+        iri_str = str(iri)
+        if class_iri_prefix is not None and not iri_str.startswith(class_iri_prefix):
+            continue
+
+        def _first(preds: List[Any]) -> str:
+            for p in preds:
+                vals = list(g.objects(iri, p))
+                if vals:
+                    return str(vals[0])
+            return ""
+
+        def _all(pred) -> List[str]:
+            return [str(v) for v in g.objects(iri, pred)]
+
+        pref_label = _first([SKOS.prefLabel, RDFS.label]) or iri_str
+        description = _first([SKOS.definition, SKOS.scopeNote, RDFS.comment])
+        synonyms = " | ".join(_all(SKOS.altLabel))
+        parents = " | ".join([f"broader concept {v}" for v in _all(SKOS.broader)])
+        equivalents = " | ".join([f"exact match {v}" for v in _all(SKOS.exactMatch) + _all(SKOS.closeMatch)])
+
+        records.append({
+            "iri": iri_str,
+            "local_name": iri_str.split("#")[-1].split("/")[-1],
+            "label": pref_label,
+            "description": description,
+            "synonyms": synonyms,
+            "parents": parents,
+            "restrictions": "",
+            "equivalent_to": equivalents,
+            "disjoint_with": "",
+        })
+
+    return pd.DataFrame(records).fillna("")

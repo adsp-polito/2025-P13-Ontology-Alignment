@@ -278,6 +278,32 @@ def main() -> None:
     print(f"  Hits@{int(args.k)} (pos):     {metrics['hits_at_k_pos']:.4f}")
     print(f"  MRR@{int(args.k)} (pos):      {metrics['mrr_at_k_pos']:.4f}")
 
+    # --- INIZIO NUOVO BLOCCO ---
+    if "retrieval_source" in merged.columns:
+        print("\n=== Breakdown by Retrieval Source ===")
+        # Estrai le sorgenti uniche (es. 'exact', 'hybrid')
+        sources = merged["retrieval_source"].dropna().unique()
+        
+        for src in sorted(sources):
+            # Filtra il dataframe solo per questa sorgente
+            subset = merged[merged["retrieval_source"] == src].copy()
+            
+            # Ricalcola le metriche su questo sottoinsieme
+            sub_metrics = compute_ranking_metrics_on_positives(
+                subset,
+                gold_col=args.gt_gold_col,
+                match_col=args.gt_match_col,
+                k=int(args.k),
+            )
+            
+            # Stampa solo se ci sono positivi in questo gruppo
+            if sub_metrics["n_pos"] > 0:
+                print(f"\nSource: {src}")
+                print(f"  n_pos:             {int(sub_metrics['n_pos'])}")
+                print(f"  Precision@1 (pos): {sub_metrics['precision_at_1_pos']:.4f}")
+                print(f"  Hits@{int(args.k)} (pos):     {sub_metrics['hits_at_k_pos']:.4f}")
+    # --- FINE NUOVO BLOCCO ---
+
     if args.out_merged:
         outp = Path(args.out_merged)
         outp.parent.mkdir(parents=True, exist_ok=True)
