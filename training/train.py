@@ -4,7 +4,6 @@ from optuna.pruners import MedianPruner
 from optuna.samplers import TPESampler
 from training.bi_encoder_training import train_bi_encoder, bi_objective
 from training.cross_encoder_training import train_cross_encoder, cross_objective
-from training.utils import stratified_split
 
 def train_model(
         df_train: pd.DataFrame,

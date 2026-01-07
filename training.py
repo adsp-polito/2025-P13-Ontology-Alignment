@@ -170,12 +170,22 @@ def parse_args() -> argparse.Namespace:
         help="Number of epochs to train the model."
     )
 
+    parser.add_argument(
+        "--split-ratios",
+        type=str,
+        default="0.75,0.15,0.10",
+        help="Train/val/test ratios as a comma-separated string, e.g. '0.75,0.15,0.10' (must sum to 1.0).",
+    )
+
     return parser.parse_args()
 
 
 def main() -> None:
     # 1. Parse Arguments
     args = parse_args()
+    # tuning is only allowed in full mode
+    if args.tune and args.mode != "full":
+        raise ValueError("--tune can only be used with --mode full.")
     if args.mode in {"full", "build-dataset"}:
         if not (args.src and args.tgt and args.align):
             raise ValueError("--src, --tgt and --align are required for modes: full, build-dataset")
@@ -192,6 +202,9 @@ def main() -> None:
             raise FileNotFoundError(f"Dataset CSV not found: {p}")
 
         df_training_final = pd.read_csv(p)
+        df_train = df_training_final
+        df_val = None
+        df_test = None
 
         required_cols = {"source_text", "target_text", "match"}
         missing = required_cols - set(df_training_final.columns)
@@ -241,19 +254,42 @@ def main() -> None:
                 target_ontology_name=Path(args.tgt).stem
             )
 
+        # Parse split ratios (train,val,test)
+        try:
+            parts = [float(x.strip()) for x in str(args.split_ratios).split(",")]
+            if len(parts) != 3:
+                raise ValueError
+            split_ratios = (parts[0], parts[1], parts[2])
+        except Exception:
+            raise ValueError(
+                f"Invalid --split-ratios='{args.split_ratios}'. Expected format 'train,val,test' e.g. '0.75,0.15,0.10'."
+            )
+
+        df_train, df_val, df_test = stratified_split(df_training_final, split_ratios=split_ratios, seed=42)
+
         if args.mode == "build-dataset":
+            base = Path(args.out_dataset)
+            stem = base.with_suffix("")
+
+            df_train.to_csv(stem.with_suffix(".train.csv"), index=False)
+            df_val.to_csv(stem.with_suffix(".val.csv"), index=False)
+            df_test.to_csv(stem.with_suffix(".test.csv"), index=False)
+
+            print("Dataset built and split saved:")
+            print(f" - {stem}.train.csv")
+            print(f" - {stem}.val.csv")
+            print(f" - {stem}.test.csv")
+
             print("Dataset built. Exiting (mode=build-dataset).")
             return
+            
     
     if args.model_type and args.model_name and args.model_output_dir:
-
         training_params = {
             "learning_rate": args.learning_rate,
             "batch_size": args.batch_size,
             "weight_decay": args.weight_decay
         }
-
-        df_train, df_val, df_test = stratified_split(df_training_final)
 
         if args.tune:
             if torch.cuda.is_available():

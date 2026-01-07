@@ -182,7 +182,7 @@ def train_cross_encoder(
         # --- WandB Logging Configuration---
         report_to="wandb",  # Enable logging to WandB
         run_name="cross-encoder-training",
-        logging_steps=num_epochs,
+        logging_steps=10,
         eval_strategy="epoch", # Evaluate after each epoch
         save_strategy="epoch",       # Save checkpoint after each epoch
         save_total_limit=2,          # Keep only the last 2 checkpoints
