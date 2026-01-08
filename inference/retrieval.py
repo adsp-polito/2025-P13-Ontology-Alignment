@@ -27,6 +27,7 @@ import numpy as np
 import torch
 import torch.nn.functional as F
 from transformers import AutoModel, AutoTokenizer
+import re
 
 from ontologies.offline_preprocessing import normalize_label
 
@@ -56,6 +57,13 @@ class Candidate:
 # Exact match retrieval
 # -----------------------------
 
+def _camelcase_to_space(text: str) -> str:
+    """
+    Convert CamelCase / PascalCase to space-separated tokens.
+    Example: MethaneHydrate -> Methane Hydrate
+    """
+    return re.sub(r"([a-z])([A-Z])", r"\1 \2", text)
+
 def exact_match_candidates(attr_text: str, *, bundle: OfflineBundle) -> List[Candidate]:
     """
     Exact match lookup using label2classes with soft normalization.
@@ -68,9 +76,19 @@ def exact_match_candidates(attr_text: str, *, bundle: OfflineBundle) -> List[Can
     """
     label2classes: Dict[str, set] = bundle["label2classes"]
 
-    q = normalize_label(attr_text)
-    if not q:
-        return []
+    # Query variants (query-side only!)
+    variants = {
+        attr_text,
+        _camelcase_to_space(attr_text),
+    }
+
+    iris = set()
+
+    for v in variants:
+        q = normalize_label(v)
+        if not q:
+            continue
+        iris |= label2classes.get(q, set())
 
     iris = sorted(label2classes.get(q, set()))
     return [Candidate(iri=i, score=1.0, source="exact") for i in iris]
