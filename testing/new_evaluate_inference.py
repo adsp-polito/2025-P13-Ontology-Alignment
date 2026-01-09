@@ -23,7 +23,8 @@ Add-on (metrics export):
   * one row for overall metrics
   * one row per retrieval_source (if present)
   * includes run metadata parsed from an optional config.txt
-- run_id is always the evaluation timestamp (Europe/Rome)
+- Evaluation ID is always the evaluation timestamp (Europe/Rome) -> EVAL_RUN_ID
+- RUN_ID (from config) is saved separately if provided.
 """
 
 from __future__ import annotations
@@ -40,6 +41,37 @@ from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
+
+
+# -------------------------
+# Config whitelist (ONLY what you want)
+# -------------------------
+
+KEEP_CONFIG_KEYS = {
+    "RUN_ID",
+    "RUN_MODE",
+    "MODEL_TYPE",
+    "MODEL_NAME",
+    "CROSS_ENCODER_MODEL_ID",
+    "BI_ENCODER_MODEL_ID",
+    "CROSS_TOKENIZER_NAME",
+    "NUM_EPOCHS",
+    "LEARNING_RATE",
+    "BATCH_SIZE",
+    "WEIGHT_DECAY",
+    "SPLIT_RATIOS",
+    "OFFLINE_SEMANTIC_BATCH_SIZE",
+    "OFFLINE_SEMANTIC_MAX_LENGTH",
+    "INFER_MODE",
+    "RETRIEVAL_LEXICAL_TOP_K",
+    "RETRIEVAL_SEMANTIC_TOP_K",
+    "RETRIEVAL_MERGED_TOP_K",
+    "HYBRID_RATIO_SEMANTIC",
+    "CROSS_TOP_K",
+    "CROSS_BATCH_SIZE",
+    "CROSS_MAX_LENGTH",
+    "KEEP_TOP_N",
+}
 
 
 # -------------------------
@@ -66,24 +98,14 @@ def _as_int01(x) -> Optional[int]:
     return 1 if v >= 0.5 else 0
 
 
-def _sanitize_key(s: str) -> str:
-    """
-    Turn arbitrary config keys into safe CSV column names.
-    Example: "Cross Top-K" -> "cross_top_k"
-    """
-    s = str(s).strip().lower()
-    s = re.sub(r"[^a-z0-9]+", "_", s)
-    s = re.sub(r"_+", "_", s).strip("_")
-    return s
-
-
 def parse_config_file(path: Optional[str]) -> Dict[str, str]:
     """
-    Parse a config.txt-like file into a flat dict.
-    Supported line formats (mixed is ok):
-      - KEY=VALUE
-      - KEY: VALUE
-    Ignores empty lines and comment lines starting with '#'.
+    Parse an INI-like config.txt into a flat dict of selected keys.
+
+    - Ignores empty lines and comments starting with '#'
+    - Ignores section headers like [Run], [Model], [Training], [Inference], ...
+    - Accepts KEY=VALUE or KEY: VALUE
+    - Keeps ONLY keys in KEEP_CONFIG_KEYS (uppercase match)
 
     If path is None, returns {} (config is optional).
     """
@@ -95,30 +117,37 @@ def parse_config_file(path: Optional[str]) -> Dict[str, str]:
         raise FileNotFoundError(f"Config file not found: {p}")
 
     cfg: Dict[str, str] = {}
+
     for raw in p.read_text(encoding="utf-8", errors="replace").splitlines():
         line = raw.strip()
         if not line or line.startswith("#"):
             continue
 
+        # ignore INI section headers
+        if line.startswith("[") and line.endswith("]"):
+            continue
+
+        # parse key/value
         if "=" in line:
             k, v = line.split("=", 1)
         elif ":" in line:
             k, v = line.split(":", 1)
         else:
-            # keep the line (still merge-friendly but less structured)
-            k, v = f"line_{len(cfg)+1}", line
+            # not a key/value line -> ignore
+            continue
 
-        k = _sanitize_key(k)
-        v = v.strip()
-        if k:
-            cfg[k] = v
+        key = k.strip().upper()
+        val = v.strip()
+
+        if key in KEEP_CONFIG_KEYS:
+            cfg[key] = val
 
     return cfg
 
 
-def _now_run_id() -> str:
+def _now_eval_run_id() -> str:
     """
-    Timestamp-based run id for evaluation time (Europe/Rome).
+    Timestamp-based evaluation run id (Europe/Rome).
     Format: YYYYMMDD_HHMMSS
     """
     tz = ZoneInfo("Europe/Rome")
@@ -331,7 +360,7 @@ def compute_ranking_metrics_on_positives(
 
 def _build_metrics_rows(
     *,
-    run_id: str,
+    eval_run_id: str,
     cfg: Dict[str, str],
     k: int,
     plan: JoinPlan,
@@ -343,7 +372,9 @@ def _build_metrics_rows(
     match_col: str,
 ) -> pd.DataFrame:
     base: Dict[str, Any] = {
-        "run_id": run_id,
+        # evaluation identifier (always timestamp)
+        "EVAL_RUN_ID": eval_run_id,
+        # evaluation params
         "k": int(k),
         "join_method": plan.method,
         "join_details": plan.details,
@@ -352,9 +383,10 @@ def _build_metrics_rows(
         "gold_attach_rate": float(gold_present),
     }
 
-    # attach config as columns: cfg__*
-    for kk, vv in cfg.items():
-        base[f"cfg__{_sanitize_key(kk)}"] = vv
+    # Attach ONLY selected config keys as plain columns.
+    # Ensure every key exists as a column (merge-friendly), even if config missing.
+    for key in sorted(KEEP_CONFIG_KEYS):
+        base[key] = cfg.get(key, "")
 
     rows: List[Dict[str, Any]] = []
 
@@ -403,7 +435,6 @@ def _write_metrics_csv(df_new: pd.DataFrame, out_path: str, append: bool) -> Non
 
     if append and outp.exists():
         df_old = pd.read_csv(outp)
-        # align columns (union)
         all_cols = list(dict.fromkeys(list(df_old.columns) + list(df_new.columns)))
         df_old = df_old.reindex(columns=all_cols)
         df_new = df_new.reindex(columns=all_cols)
@@ -426,7 +457,6 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--gt-id-col", default=None, help="Optional GT id col for join (rare).")
     ap.add_argument("--pred-id-col", default=None, help="Optional pred id col for join (rare).")
 
-    # default adjusted to your gold file format
     ap.add_argument("--gt-gold-col", default="gold_target_iris", help="Gold target IRI col in ground truth.")
     ap.add_argument("--gt-match-col", default="match", help="Match col in ground truth (if missing, assumed all-positives).")
     ap.add_argument("--gt-text-col", default="source_text", help="Attribute text col in ground truth (legacy).")
@@ -434,11 +464,10 @@ def parse_args() -> argparse.Namespace:
 
     ap.add_argument("--out-merged", default=None, help="Optional path to save merged CSV (pred+gt).")
 
-    # NEW: metrics CSV output + config metadata (recommended but optional)
     ap.add_argument(
         "--config",
         default=None,
-        help="(Recommended) Path to config.txt to attach run metadata (key=value or key: value).",
+        help="(Recommended) Path to config.txt to attach run metadata (INI-like sections supported).",
     )
     ap.add_argument(
         "--out-metrics",
@@ -479,7 +508,6 @@ def main() -> None:
         pred_text_col=args.pred_text_col,
     )
 
-    # sanity: how many rows got a gold label
     gold_present = merged[args.gt_gold_col].notna().mean() if args.gt_gold_col in merged.columns else 0.0
 
     metrics = compute_ranking_metrics_on_positives(
@@ -534,7 +562,7 @@ def main() -> None:
         merged.to_csv(outp, index=False)
         print(f"\nSaved merged CSV to: {outp}")
 
-    # --- NEW: save metrics CSV ---
+    # --- Save metrics CSV ---
     if args.out_metrics:
         if not args.config:
             print(
@@ -543,10 +571,10 @@ def main() -> None:
             )
 
         cfg = parse_config_file(args.config)  # {} if None
-        run_id = _now_run_id()
+        eval_run_id = _now_eval_run_id()
 
         df_metrics = _build_metrics_rows(
-            run_id=run_id,
+            eval_run_id=eval_run_id,
             cfg=cfg,
             k=int(args.k),
             plan=plan,
@@ -560,7 +588,7 @@ def main() -> None:
 
         _write_metrics_csv(df_metrics, args.out_metrics, append=bool(args.append_metrics))
         print(f"\nSaved metrics CSV to: {Path(args.out_metrics).resolve()}")
-        print(f"Evaluation run_id (timestamp): {run_id}")
+        print(f"Evaluation EVAL_RUN_ID (timestamp): {eval_run_id}")
 
     print("\n[DONE]")
 
