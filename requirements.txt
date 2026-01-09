@@ -9,3 +9,4 @@ networkx==3.6.1
 datasets==4.4.2
 accelerate==1.12.0
 optuna==4.6.0
+wandb==0.16.12

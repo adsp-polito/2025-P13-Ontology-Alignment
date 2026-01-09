@@ -1,0 +1,35 @@
+
+=== Evaluation Report ===
+Join method: source_iri | pred[source_iri] == gt[source_iri]
+Pred rows: 67
+Coverage (predicted_iri != null): 1.0000
+GT attach rate (gold present after join): 1.0000
+
+Retrieval source distribution:
+     exact: 0.6567
+    hybrid: 0.3433
+
+Metrics on POSITIVES only (match==1):
+  n_pos:             67
+  Precision@1 (pos): 0.6119
+  Hits@20 (pos):     0.7761
+  MRR@20 (pos):      0.6627
+
+=== Breakdown by Retrieval Source ===
+
+Source: exact
+  n_pos:             44
+  Precision@1 (pos): 0.7273
+  Hits@20 (pos):     0.7273
+
+Source: hybrid
+  n_pos:             23
+  Precision@1 (pos): 0.3913
+  Hits@20 (pos):     0.8696
+
+Saved merged CSV to: runs_toEvaluate/predictions_and_gold_bi-encoderScibert/merged_eval.csv
+
+[DONE]
+CMD: python testing/new_evaluate_inference.py --test-split runs_toEvaluate/predictions_and_gold_bi-encoderScibert/training_dataset.test.gold.csv --predictions runs_toEvaluate/predictions_and_gold_bi-encoderScibert/predictions.csv --k 20 --out-merged runs_toEvaluate/predictions_and_gold_bi-encoderScibert/merged_eval.csv
+CWD: /Users/usermastro/Desktop/Primo_Semestre_2526/ADSP/Ontology Alignment Project/OAProject
+
