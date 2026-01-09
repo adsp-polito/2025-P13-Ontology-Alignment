@@ -12,3 +12,4 @@ datasets/test_split.csv
 datasets/test_split_inference.csv
 datasets/val_split.csv
 notebooks/outputs/
+runs_toEvaluate
