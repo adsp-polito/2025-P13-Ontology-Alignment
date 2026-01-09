@@ -18,7 +18,12 @@ Those two files are typically compatible via:
 - gold labels stored as `gold_target_iris` (often a stringified Python list, sometimes with >1 IRI)
 - the gold file may not have a `match` column (it is effectively all positives)
 
-Everything else is left unchanged.
+Add-on (metrics export):
+- Optionally saves metrics into a merge-friendly CSV:
+  * one row for overall metrics
+  * one row per retrieval_source (if present)
+  * includes run metadata parsed from an optional config.txt
+- run_id is always the evaluation timestamp (Europe/Rome)
 """
 
 from __future__ import annotations
@@ -27,8 +32,11 @@ import argparse
 import ast
 import re
 from dataclasses import dataclass
+from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Tuple
+
+from zoneinfo import ZoneInfo
 
 import numpy as np
 import pandas as pd
@@ -56,6 +64,65 @@ def _as_int01(x) -> Optional[int]:
     except Exception:
         return None
     return 1 if v >= 0.5 else 0
+
+
+def _sanitize_key(s: str) -> str:
+    """
+    Turn arbitrary config keys into safe CSV column names.
+    Example: "Cross Top-K" -> "cross_top_k"
+    """
+    s = str(s).strip().lower()
+    s = re.sub(r"[^a-z0-9]+", "_", s)
+    s = re.sub(r"_+", "_", s).strip("_")
+    return s
+
+
+def parse_config_file(path: Optional[str]) -> Dict[str, str]:
+    """
+    Parse a config.txt-like file into a flat dict.
+    Supported line formats (mixed is ok):
+      - KEY=VALUE
+      - KEY: VALUE
+    Ignores empty lines and comment lines starting with '#'.
+
+    If path is None, returns {} (config is optional).
+    """
+    if not path:
+        return {}
+
+    p = Path(path)
+    if not p.exists():
+        raise FileNotFoundError(f"Config file not found: {p}")
+
+    cfg: Dict[str, str] = {}
+    for raw in p.read_text(encoding="utf-8", errors="replace").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+
+        if "=" in line:
+            k, v = line.split("=", 1)
+        elif ":" in line:
+            k, v = line.split(":", 1)
+        else:
+            # keep the line (still merge-friendly but less structured)
+            k, v = f"line_{len(cfg)+1}", line
+
+        k = _sanitize_key(k)
+        v = v.strip()
+        if k:
+            cfg[k] = v
+
+    return cfg
+
+
+def _now_run_id() -> str:
+    """
+    Timestamp-based run id for evaluation time (Europe/Rome).
+    Format: YYYYMMDD_HHMMSS
+    """
+    tz = ZoneInfo("Europe/Rome")
+    return datetime.now(tz).strftime("%Y%m%d_%H%M%S")
 
 
 @dataclass
@@ -204,19 +271,16 @@ def compute_ranking_metrics_on_positives(
             return []
         if isinstance(v, str):
             s = v.strip()
-            # try parse stringified list
             if s.startswith("[") and s.endswith("]"):
                 try:
                     vv = ast.literal_eval(s)
                     if isinstance(vv, list):
                         return [str(x) for x in vv if x is not None]
                 except Exception:
-                    # fall back to treating it as a single string
                     pass
             return [s]
         return [str(v)]
 
-    # Build per-row ranked list (length <= K) and per-row gold list(s)
     ranked_lists: List[List[str]] = []
     gold_lists: List[List[str]] = []
 
@@ -234,14 +298,12 @@ def compute_ranking_metrics_on_positives(
 
     pred1 = df_pos["predicted_iri"].astype(str).tolist()
 
-    # Precision@1 on positives: correct if pred1 equals ANY gold
     correct1 = 0
     for g_list, p in zip(gold_lists, pred1):
         if p in set(g_list):
             correct1 += 1
     p_at_1 = correct1 / n_pos
 
-    # Hits@K + MRR@K: hit if ANY gold appears; RR uses best (smallest) rank
     hits = 0
     rr_sum = 0.0
     for g_list, ranks in zip(gold_lists, ranked_lists):
@@ -263,6 +325,98 @@ def compute_ranking_metrics_on_positives(
     }
 
 
+# -------------------------
+# Metrics CSV export
+# -------------------------
+
+def _build_metrics_rows(
+    *,
+    run_id: str,
+    cfg: Dict[str, str],
+    k: int,
+    plan: JoinPlan,
+    stats: Dict[str, Any],
+    gold_present: float,
+    overall_metrics: Dict[str, float],
+    merged: pd.DataFrame,
+    gold_col: str,
+    match_col: str,
+) -> pd.DataFrame:
+    base: Dict[str, Any] = {
+        "run_id": run_id,
+        "k": int(k),
+        "join_method": plan.method,
+        "join_details": plan.details,
+        "n_pred": int(stats.get("n", 0)),
+        "coverage": float(stats.get("coverage", float("nan"))),
+        "gold_attach_rate": float(gold_present),
+    }
+
+    # attach config as columns: cfg__*
+    for kk, vv in cfg.items():
+        base[f"cfg__{_sanitize_key(kk)}"] = vv
+
+    rows: List[Dict[str, Any]] = []
+
+    # overall
+    rows.append(
+        {
+            **base,
+            "scope": "overall",
+            "retrieval_source": "ALL",
+            "n_pos": float(overall_metrics.get("n_pos", float("nan"))),
+            "precision_at_1_pos": float(overall_metrics.get("precision_at_1_pos", float("nan"))),
+            "hits_at_k_pos": float(overall_metrics.get("hits_at_k_pos", float("nan"))),
+            "mrr_at_k_pos": float(overall_metrics.get("mrr_at_k_pos", float("nan"))),
+        }
+    )
+
+    # per retrieval_source (if available)
+    if "retrieval_source" in merged.columns:
+        sources = sorted([str(x) for x in merged["retrieval_source"].dropna().unique()])
+        for src in sources:
+            subset = merged[merged["retrieval_source"].astype(str) == src].copy()
+            sub_metrics = compute_ranking_metrics_on_positives(
+                subset,
+                gold_col=gold_col,
+                match_col=match_col,
+                k=int(k),
+            )
+            rows.append(
+                {
+                    **base,
+                    "scope": "by_retrieval_source",
+                    "retrieval_source": src,
+                    "n_pos": float(sub_metrics.get("n_pos", float("nan"))),
+                    "precision_at_1_pos": float(sub_metrics.get("precision_at_1_pos", float("nan"))),
+                    "hits_at_k_pos": float(sub_metrics.get("hits_at_k_pos", float("nan"))),
+                    "mrr_at_k_pos": float(sub_metrics.get("mrr_at_k_pos", float("nan"))),
+                }
+            )
+
+    return pd.DataFrame(rows)
+
+
+def _write_metrics_csv(df_new: pd.DataFrame, out_path: str, append: bool) -> None:
+    outp = Path(out_path)
+    outp.parent.mkdir(parents=True, exist_ok=True)
+
+    if append and outp.exists():
+        df_old = pd.read_csv(outp)
+        # align columns (union)
+        all_cols = list(dict.fromkeys(list(df_old.columns) + list(df_new.columns)))
+        df_old = df_old.reindex(columns=all_cols)
+        df_new = df_new.reindex(columns=all_cols)
+        df_out = pd.concat([df_old, df_new], ignore_index=True)
+        df_out.to_csv(outp, index=False)
+    else:
+        df_new.to_csv(outp, index=False)
+
+
+# -------------------------
+# CLI
+# -------------------------
+
 def parse_args() -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Evaluate run_inference.py outputs vs test split.")
     ap.add_argument("--test-split", required=True, help="Path to ground-truth CSV (e.g., training_dataset.test.gold.csv).")
@@ -279,8 +433,30 @@ def parse_args() -> argparse.Namespace:
     ap.add_argument("--pred-text-col", default="attribute_text", help="Attribute text col in predictions.")
 
     ap.add_argument("--out-merged", default=None, help="Optional path to save merged CSV (pred+gt).")
+
+    # NEW: metrics CSV output + config metadata (recommended but optional)
+    ap.add_argument(
+        "--config",
+        default=None,
+        help="(Recommended) Path to config.txt to attach run metadata (key=value or key: value).",
+    )
+    ap.add_argument(
+        "--out-metrics",
+        default=None,
+        help="Optional path to save metrics CSV (append-friendly). If not set, metrics are not saved.",
+    )
+    ap.add_argument(
+        "--append-metrics",
+        action="store_true",
+        help="If set and --out-metrics exists, append new rows (aligning columns).",
+    )
+
     return ap.parse_args()
 
+
+# -------------------------
+# Main
+# -------------------------
 
 def main() -> None:
     args = parse_args()
@@ -331,7 +507,7 @@ def main() -> None:
     print(f"  Hits@{int(args.k)} (pos):     {metrics['hits_at_k_pos']:.4f}")
     print(f"  MRR@{int(args.k)} (pos):      {metrics['mrr_at_k_pos']:.4f}")
 
-    # --- INIZIO NUOVO BLOCCO ---
+    # --- Breakdown by retrieval_source (printed) ---
     if "retrieval_source" in merged.columns:
         print("\n=== Breakdown by Retrieval Source ===")
         sources = merged["retrieval_source"].dropna().unique()
@@ -351,13 +527,40 @@ def main() -> None:
                 print(f"  n_pos:             {int(sub_metrics['n_pos'])}")
                 print(f"  Precision@1 (pos): {sub_metrics['precision_at_1_pos']:.4f}")
                 print(f"  Hits@{int(args.k)} (pos):     {sub_metrics['hits_at_k_pos']:.4f}")
-    # --- FINE NUOVO BLOCCO ---
 
     if args.out_merged:
         outp = Path(args.out_merged)
         outp.parent.mkdir(parents=True, exist_ok=True)
         merged.to_csv(outp, index=False)
         print(f"\nSaved merged CSV to: {outp}")
+
+    # --- NEW: save metrics CSV ---
+    if args.out_metrics:
+        if not args.config:
+            print(
+                "\n[NOTE] --config not provided. Metrics will be saved without run metadata. "
+                "For comparability across runs, passing --config is recommended."
+            )
+
+        cfg = parse_config_file(args.config)  # {} if None
+        run_id = _now_run_id()
+
+        df_metrics = _build_metrics_rows(
+            run_id=run_id,
+            cfg=cfg,
+            k=int(args.k),
+            plan=plan,
+            stats=stats,
+            gold_present=float(gold_present),
+            overall_metrics=metrics,
+            merged=merged,
+            gold_col=args.gt_gold_col,
+            match_col=args.gt_match_col,
+        )
+
+        _write_metrics_csv(df_metrics, args.out_metrics, append=bool(args.append_metrics))
+        print(f"\nSaved metrics CSV to: {Path(args.out_metrics).resolve()}")
+        print(f"Evaluation run_id (timestamp): {run_id}")
 
     print("\n[DONE]")
 

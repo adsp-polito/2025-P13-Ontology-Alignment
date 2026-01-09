@@ -1,0 +1,45 @@
+# Ontology Alignment – Run Configuration
+# Generated on: 2026-01-08T13:23:37.952667
+
+[Run]
+RUN_ID = unified_run_20260108_131224
+OUT_DIR = outputs/unified_run_20260108_131224
+RUN_MODE = full
+
+[Model]
+MODEL_TYPE = cross-encoder
+MODEL_NAME = allenai/scibert_scivocab_uncased
+CROSS_ENCODER_MODEL_ID = outputs/unified_run_20260108_131224/training/models/cross-encoder_custom/final_cross_encoder_model
+BI_ENCODER_MODEL_ID = allenai/scibert_scivocab_uncased
+CROSS_TOKENIZER_NAME = allenai/scibert_scivocab_uncased
+
+[Training]
+NUM_EPOCHS = 10
+LEARNING_RATE = 3e-05
+BATCH_SIZE = 16
+WEIGHT_DECAY = 0.01
+SPLIT_RATIOS = 0.75,0.15,0.10
+
+[Offline]
+OFFLINE_ONT_PATH = /content/envo.owl
+OFFLINE_PREFIX = None
+OFFLINE_SEMANTIC_BATCH_SIZE = 64
+OFFLINE_SEMANTIC_MAX_LENGTH = 256
+OFFLINE_BUNDLE_PKL = outputs/unified_run_20260108_131224/offline/offline_bundle.pkl
+ONTOLOGY_INTERNAL_CSV = outputs/unified_run_20260108_131224/offline/ontology_internal.csv
+
+[Inference]
+INFER_MODE = hybrid
+INFER_INPUT_CSV = outputs/unified_run_20260108_131224/training/training_dataset.test.queries.csv
+INFER_OUT_CSV = outputs/unified_run_20260108_131224/inference/predictions.csv
+RETRIEVAL_COL = source_label
+SCORING_COL = source_text
+ID_COL = source_iri
+RETRIEVAL_LEXICAL_TOP_K = 100
+RETRIEVAL_SEMANTIC_TOP_K = 100
+RETRIEVAL_MERGED_TOP_K = 150
+HYBRID_RATIO_SEMANTIC = 0.5
+CROSS_TOP_K = 100
+CROSS_BATCH_SIZE = 32
+CROSS_MAX_LENGTH = 256
+KEEP_TOP_N = 20

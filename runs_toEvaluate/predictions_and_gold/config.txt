@@ -1,0 +1,21 @@
+Configurazione iperparametri
+INFER_MODE = "hybrid"
+RETRIEVAL_LEXICAL_TOP_K = 100
+RETRIEVAL_SEMANTIC_TOP_K = 100
+RETRIEVAL_MERGED_TOP_K = 150
+HYBRID_RATIO_SEMANTIC = 0.5
+SEMANTIC_BATCH_SIZE = 64
+
+CROSS_TOP_K = 100
+CROSS_BATCH_SIZE = 32
+CROSS_MAX_LENGTH = 256
+
+KEEP_TOP_N = 20
+
+Models:
+BI_ENCODER_MODEL_ID = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
+MODEL_NAME = "allenai/scibert_scivocab_uncased"
+CROSS_TOKENIZER_NAME = MODEL_NAME
+
+Mode:
+RUN_MODE = "full"
