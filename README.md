@@ -1,5 +1,3 @@
-# 2025-P13-Ontology-Alignment
-
 # Ontology Alignment Classifier Based on NLP
 
 A modular and production-oriented framework for **ontology alignment**, designed to align free-text attributes (e.g. study variables, survey fields, metadata) to ontology classes using a **two-stage architecture**:
@@ -9,252 +7,271 @@ A modular and production-oriented framework for **ontology alignment**, designed
 
 The framework supports dataset construction, model training, offline preprocessing, and scalable inference, with a strong focus on reproducibility and deployment constraints.
 
----
+## Table of contents
+- [Key ideas](#key-ideas)
+- [Architecture](#architecture)
+- [Repository layout](#repository-layout)
+- [Installation](#installation)
+- [Data formats](#data-formats)
+- [Training pipeline](#training-pipeline)
+- [Offline preprocessing (bundle)](#offline-preprocessing-bundle)
+- [Inference](#inference)
+- [Evaluation](#evaluation)
+- [Inference config search](#inference-config-search)
+- [Notebooks and visualization](#notebooks-and-visualization)
+- [Reproducibility and performance](#reproducibility-and-performance)
 
-## Overview
-
-Ontology alignment is framed as a **binary classification / ranking problem** between:
-- a *source text* (attribute, variable, or field name)
-- a *target ontology class* (label + semantic context)
-
-This repository provides:
-- tools to **build training datasets** with positives and structured negatives
-- **bi-encoder and cross-encoder training pipelines**
-- an **offline bundle** for fast inference (lexical + semantic indices)
-- a **production-ready inference pipeline** with caching and batching
+## Key ideas
+- Two-stage inference: high-recall candidate retrieval (exact + lexical + semantic) followed by cross-encoder scoring.
+- Unified ontology schema (label, description, synonyms, hierarchy context) used consistently across training and inference.
+- Offline bundle for production: lexical indices + semantic embeddings stored once, reused across runs.
+- Reproducible, modular training with dataset splits and Optuna tuning.
 
 The design follows a strict separation between:
 - **offline steps** (heavy, one-time computation)
 - **online inference** (fast, memory-efficient, reusable components)
 
----
+## Architecture
+```
+Raw ontologies (.owl/.rdf) + alignment (.rdf)
+        |            
+        v
+  Raw loader -> unified view -> text encoding
+        |                       (source SHORT_TEXT, target RICH_TEXT)
+        v
+  Dataset builder (positives + hard negatives + random negatives)
+        v
+  Train cross-encoder
 
-## Architecture Overview
+Target ontology only (offline):
+  unified view -> offline bundle (lexical index + semantic embeddings)
 
-![Architecture diagram](docs/images/architecture.png)
-
+Inference (online):
+  attributes -> retrieval (exact/lexical/semantic) -> cross-encoder rerank -> predictions
+```
 **High-level flow:**
 1. Ontologies are normalized into a unified internal representation
 2. Training datasets are built from reference alignments + negative mining
-3. Models are trained (bi-encoder or cross-encoder)
+3. Model is trained
 4. Target ontologies are preprocessed into an offline bundle
 5. Inference runs in two stages: retrieval → scoring
 
----
+## Repository layout
+- `ontologies/`: ontology loaders, unified view, offline preprocessing, semantic index
+- `data/`: dataset builder, source/target text encoding
+- `miners/`: hard-negative mining, random negatives
+- `training/`: bi-encoder and cross-encoder training, Optuna optimization
+- `inference/`: Stage-A retrieval and Stage-B scoring
+- `testing/`: inference evaluation and model sanity tests
+- `visualization/`: alignment graph visualization
+- `datasets/`: sample ontologies and inference splits
+- `outputs/`: recommended location for artifacts (models, bundles, predictions)
 
-## Key Concepts
+## Installation
+Python dependencies are pinned in `requirements.txt`.
 
-### Unified View
-All ontologies are normalized into a common schema containing:
-- `iri`
-- `label`
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
+
+## Data formats
+
+### 1) Raw ontology input
+- Supported: OWL/RDF ontologies (local file or URL). SKOS is also supported if no OWL classes are found.
+- Loader output (raw): includes `iri`, `local_name`, `label`, `parents`, `equivalent_to`, `disjoint_with`, and ontology-specific annotation columns.
+
+### 2) Unified view schema
+The unified view normalizes every class to:
+- `iri`, `local_name`, `label`
+- `description`
 - `synonyms`
-- hierarchical and logical context
-- derived textual representations
+- `parents_label`
+- `equivalent_to`
+- `disjoint_with`
 
-### SHORT_TEXT vs RICH_TEXT
-- **SHORT_TEXT** (source): compact, configurable text built from labels and optional metadata  
-- **RICH_TEXT** (target): richer semantic description used for scoring and embedding
+### 3) Text encoding
+- **Source SHORT_TEXT** (configurable): built from label, description, synonyms, parents, equivalents, disjoints.
+- **Target RICH_TEXT** (fixed): label + description + synonyms + parents + equivalents + disjoints.
 
-### Two-Stage Inference
-- **Stage A (Retrieval):** maximize recall, cheap heuristics
-- **Stage B (Scoring):** maximize precision, expensive neural model
+### 4) Training dataset
+Produced by `data/dataset_builder.py`:
+- `source_iri`, `target_iri`
+- `source_label`, `target_label`
+- `source_text`, `target_text`
+- `sample_type`: `positive`, `hard_negative`, `random_negative`
+- `match`: 1.0 for positive, 0.0 for negatives
 
----
+### 5) Inference input
+`run_inference.py` expects a CSV with at least one column:
+- `retrieval_col` (default `attribute`): used for exact + lexical retrieval
+- `scoring_col` (optional, default to retrieval_col): used for semantic retrieval + cross-encoder scoring
 
-## Candidate Retrieval — Stage A
+### 6) Inference output
+`run_inference.py` writes a predictions CSV with:
+- `row_id` or your `--id-col`
+- `attribute_text`
+- `retrieval_source` (`exact`, `lexical`, `semantic`, `hybrid`, `none`)
+- `num_retrieved`, `num_scored`
+- `predicted_iri`, `predicted_score`
+- optional `topN_iri`, `topN_score` columns if `--keep-top-n` > 0
 
-![Retrieval pipeline](docs/images/retrieval_pipeline.png)
+## Training pipeline
+Entry point: `training.py` with 3 modes.
 
-Stage A produces a shortlist of candidate ontology classes for each attribute.
+### Mode 1: Full pipeline (build dataset + train)
+```bash
+python training.py \
+  --mode full \
+  --src datasets/sweet.owl \
+  --tgt datasets/envo.owl \
+  --align datasets/envo-sweet.rdf \
+  --out-src outputs/source.csv \
+  --out-tgt outputs/target.csv \
+  --out-dataset outputs/alignment_dataset.csv \
+  --model-type cross-encoder \
+  --model-name allenai/scibert_scivocab_uncased \
+  --model-output-dir outputs/cross_encoder_model
+```
 
-### Retrieval Sources
-1. **Exact Match**
-   - Soft-normalized label and synonym matching
-2. **Lexical Retrieval**
-   - Inverted index + IDF-weighted subword overlap
-3. **Semantic Retrieval**
-   - Bi-encoder embeddings + cosine similarity
-4. **Hybrid Mode**
-   - Controlled merge of lexical and semantic candidates
+### Mode 2: Build dataset only
+```bash
+python training.py \
+  --mode build-dataset \
+  --src datasets/sweet.owl \
+  --tgt datasets/envo.owl \
+  --align datasets/envo-sweet.rdf \
+  --out-src outputs/source.csv \
+  --out-tgt outputs/target.csv \
+  --out-dataset outputs/alignment_dataset.csv
+```
+Outputs also include stratified splits and evaluation artifacts:
+- `alignment_dataset.train.csv`, `.val.csv`, `.test.csv`
+- `alignment_dataset.test.queries.csv`, `.test.gold.csv`
 
-### Design Principles
-- No model or tokenizer is reloaded per attribute
-- Bi-encoder is loaded once and reused
-- Semantic embeddings are memory-mapped when possible
-- Retrieval scores are *source-specific* and not directly compared
+### Mode 3: Train only
+```bash
+python training.py \
+  --mode train-only \
+  --dataset-csv outputs/alignment_dataset.train.csv \
+  --model-type cross-encoder \
+  --model-name allenai/scibert_scivocab_uncased \
+  --model-output-dir outputs/cross_encoder_model
+```
 
----
+### Source text configuration
+Control the SHORT_TEXT features (for ablations or production constraints):
+- `--src-use-description`
+- `--src-use-synonyms`
+- `--src-use-parents`
+- `--src-use-equivalent`
+- `--src-use-disjoint`
 
-## Cross-Encoder Scoring — Stage B
+### Hyperparameter tuning (Optuna)
+```bash
+python training.py \
+  --mode full \
+  --tune --n-trials 20 \
+  --model-type cross-encoder \
+  --model-name allenai/scibert_scivocab_uncased \
+  --model-output-dir outputs/cross_encoder_model_tuned \
+  --src datasets/sweet.owl \
+  --tgt datasets/envo.owl \
+  --align datasets/envo-sweet.rdf \
+  --out-src outputs/source.csv \
+  --out-tgt outputs/target.csv \
+  --out-dataset outputs/alignment_dataset.csv
+```
 
-Stage B re-ranks candidates using a HuggingFace **cross-encoder** trained for sequence classification.
+## Offline preprocessing (bundle)
+Build the offline bundle for the target ontology. This is required for inference.
 
-Given:
-- an attribute text
-- a shortlist of candidate IRIs
-- a mapping `iri → RICH_TEXT`
+```bash
+python build_ontology_bundle.py \
+  --ont-path datasets/envo.owl \
+  --prefix "http://purl.obolibrary.org/obo/ENVO_" \
+  --out-csv outputs/internal_ontology.csv \
+  --out-bundle outputs/offline_bundle.pkl \
+  --tokenizer-name allenai/scibert_scivocab_uncased \
+  --bi-encoder-model-id allenai/scibert_scivocab_uncased
+```
 
-The cross-encoder outputs a probability-like alignment score.
+What is stored in the bundle:
+- `label2classes` for exact match
+- subword token sets + inverted index + IDF for lexical retrieval
+- semantic index (bi-encoder embeddings + metadata)
 
-### Features
-- Batched scoring
-- Cached tokenizer and model
-- Supports binary and multi-class heads
-- Clean separation from retrieval logic
-
----
-
-## Dataset Construction
-
-Training datasets are built by combining:
-
-- **Positive samples**
-  - From reference alignment files
-- **Hard negatives**
-  - Mined using semantic similarity (SBERT)
-  - Filtered with lexical heuristics to avoid false negatives
-- **Random negatives**
-  - Uniformly sampled non-aligned pairs
-
-Each sample includes a `sample_type` field:
-- `positive`
-- `hard_negative`
-- `random_negative`
-
-This allows:
-- debugging
-- ablation studies
-- curriculum or weighted training strategies
-
----
-
-## Training
-
-Training is orchestrated via a single entry point supporting **three modes**:
-
-1. **Full pipeline**
-   - Load ontologies
-   - Build dataset
-   - Train model
-2. **Dataset-only**
-   - Build and inspect training CSV
-3. **Train-only**
-   - Train from an existing dataset CSV
-
-Supported models:
-- **Bi-encoder** (for semantic retrieval)
-- **Cross-encoder** (for final scoring)
-
-Splits are **stratified** to preserve label balance.
-
----
-
-## Offline Preprocessing
-
-Target ontologies are preprocessed once into an **offline bundle** containing:
-
-- lexical structures:
-  - `label2classes`
-  - inverted index
-  - IDF statistics
-- semantic index:
-  - bi-encoder embeddings
-  - metadata (model id, normalization, dimensions)
-
-Semantic embeddings are optionally stored in a separate `.npy` file and loaded via memory-mapping for scalability.
-
----
+Semantic embeddings are stored in a separate `.semantic_embeddings.npy` next to the bundle and loaded with memory mapping at inference time.
 
 ## Inference
+Entry point: `run_inference.py`.
 
-Inference is fully decoupled from training and dataset construction.
+```bash
+python run_inference.py \
+  --bundle outputs/offline_bundle.pkl \
+  --ontology-csv outputs/internal_ontology.csv \
+  --input-csv outputs/alignment_dataset.test.queries.csv \
+  --out-csv outputs/predictions.csv \
+  --retrieval-col attribute \
+  --scoring-col attribute \
+  --mode hybrid \
+  --cross-encoder-model-id outputs/cross_encoder_model/final_cross_encoder_model \
+  --cross-top-k 50 \
+  --keep-top-n 5
+```
 
-Typical flow:
-1. Load offline bundle
-2. Initialize `CandidateRetriever`
-3. Retrieve candidates (Stage A)
-4. Score candidates with `CrossEncoderScorer` (Stage B)
-5. Return best prediction or ranked list
+Retrieval modes:
+- `lexical`: exact -> lexical; fallback to semantic only if lexical is empty.
+- `hybrid`: exact -> always merge lexical + semantic with a fixed budget split.
 
-Both **single-attribute** and **batch inference** are supported.
+Key knobs:
+- `--retrieval-lexical-top-k`, `--retrieval-semantic-top-k`, `--retrieval-merged-top-k`
+- `--hybrid-ratio-semantic` (split between lexical/semantic in hybrid)
+- `--cross-top-k`, `--cross-batch-size`, `--cross-max-length`
 
----
+## Evaluation
+Evaluate predictions against the gold test split produced by training.
 
-## Repository Structure
+```bash
+python testing/new_evaluate_inference.py \
+  --test-split outputs/alignment_dataset.test.gold.csv \
+  --predictions outputs/predictions.csv \
+  --k 10 \
+  --out-merged outputs/predictions_merged.csv \
+  --out-metrics outputs/metrics.csv
+```
 
-├── ontologies/
-│   ├── raw_loader.py
-│   ├── unified_view.py
-│   ├── facade.py
-│   ├── offline_preprocessing.py
-│   └── semantic_index.py
-│
-├── data/
-│   ├── dataset_builder.py
-│   └── text_encoding.py
-│
-├── miners/
-│   ├── hard_negatives_miner.py
-│   └── random_negatives_miner.py
-│
-├── training/
-│   ├── train.py
-│   ├── bi_encoder_training.py
-│   ├── cross_encoder_training.py
-│   └── utils.py
-│
-├── inference/
-│   ├── retrieval.py
-│   └── scoring.py
-│
-├── notebooks/
-│   └── launcher_dataset&training_colab.ipynb
-│
-└── docs/ ??
-    └── images/
+Reported metrics (on positives only):
+- Precision@1
+- Hits@K
+- MRR@K
+- Coverage (overall)
 
----
+## Inference config search
+Use Optuna to search inference parameters that maximize Precision@1.
 
-## Design Philosophy
+```bash
+python search_inference_best_config.py \
+  --bundle outputs/offline_bundle.pkl \
+  --ontology-csv outputs/internal_ontology.csv \
+  --input-csv datasets/val_split_inference.csv \
+  --out-csv outputs/tmp_predictions.csv \
+  --mode hybrid \
+  --cross-encoder-model-id outputs/cross_encoder_model/final_cross_encoder_model \
+  --retrieval-col source_label \
+  --scoring-col source_text \
+  --gt-gold-col target_iri \
+  --gt-match-col match
+```
 
-- **Separation of concerns**
-  - dataset ≠ training ≠ inference
-- **Offline first**
-  - heavy computation is pushed offline
-- **Production constraints**
-  - caching, batching, memory-mapping
-- **Reproducibility**
-  - deterministic seeds
-  - explicit configuration objects
-- **Inspectability**
-  - CSV-based datasets
-  - explicit sample types
-  - transparent heuristics
+## Notebooks and visualization
+- `notebooks/launcher_fullPipeline_colab.ipynb`: end-to-end pipeline in Colab.
+- `local_laauncher_fullPipeline.ipynb`: local launcher notebook.
+- `visualization/alignment_visualization.py`: static or interactive alignment graph.
 
----
-
-## Project Status
-
-The framework is **feature-complete** for:
-- dataset construction
-- model training
-- offline preprocessing
-- scalable inference
-
-Ongoing work focuses on:
-- extensive testing
-- model training and evaluation
-- downstream integration
-
----
-
-## License
-
-Specify your license here. !!!!!!
-
----
-
-## Acknowledgements
-
-???
+## Reproducibility and performance
+- Deterministic seeds for semantic index and Optuna search.
+- Tokenizers and models are loaded once per run (retrieval and scoring).
+- Semantic embeddings can be memory-mapped to avoid large RAM usage.
+- All offline-heavy steps are isolated from online inference.
