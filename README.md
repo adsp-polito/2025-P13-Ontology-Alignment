@@ -1,10 +1,10 @@
 # 2025-P13-Ontology-Alignment
 
-# Ontology Alignment Framework
+# Ontology Alignment Classifier Based on NLP
 
 A modular and production-oriented framework for **ontology alignment**, designed to align free-text attributes (e.g. study variables, survey fields, metadata) to ontology classes using a **two-stage architecture**:
 
-1. **High-recall candidate retrieval** (Stage A)
+1. **High-recall retrieval** (Stage A)
 2. **High-precision cross-encoder scoring** (Stage B)
 
 The framework supports dataset construction, model training, offline preprocessing, and scalable inference, with a strong focus on reproducibility and deployment constraints.
