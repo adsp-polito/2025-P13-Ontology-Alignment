@@ -532,5 +532,3 @@ def main() -> None:
 
 if __name__ == "__main__":
     main()
-
-    # python run_inference.py --bundle outputs/offline_bundle.pkl --ontology-csv outputs/internal_ontology.csv --input-csv datasets/test_split.csv --out-csv outputs/predictions.csv --retrieval-col source_label --scoring-col source_text --mode hybrid --cross-encoder-model-id outputs/cross_encoder_model_scibert/final_cross_encoder_model --cross-top-k 50  --keep-top-n 50
