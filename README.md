@@ -267,7 +267,7 @@ python search_inference_best_config.py \
 
 ## Notebooks and visualization
 - `notebooks/launcher_fullPipeline_colab.ipynb`: end-to-end pipeline in Colab.
-- `local_laauncher_fullPipeline.ipynb`: local launcher notebook.
+- `local_launcher_fullPipeline.ipynb`: local launcher notebook.
 - `visualization/alignment_visualization.py`: static or interactive alignment graph.
 
 ## Reproducibility and performance
