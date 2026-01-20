@@ -84,7 +84,23 @@ def build_queries_and_gold_from_pairwise_test(
     scoring_col: str = "source_text",
     target_id_col: str = "target_iri",
     match_col: str = "match",
-):
+) -> tuple[pd.DataFrame, pd.DataFrame]:
+    """
+    Build queries and gold dataframes from pairwise test dataframe (Option B).
+
+    Args:
+        df_test (pd.DataFrame): input test dataframe in pairwise format
+        id_col (str, optional): column name for source IDs. Defaults to "source_iri".
+        retrieval_col (str, optional): column name for source labels used for retrieval. Defaults to "source_label".
+        scoring_col (str, optional): column name for source texts used for scoring. Defaults to "source_text".
+        target_id_col (str, optional): column name for target IDs. Defaults to "target_iri".
+        match_col (str, optional): column name for match labels. Defaults to "match".
+    Raises:
+        ValueError: if required columns are missing or no positive matches found
+
+    Returns:
+        tuple[pd.DataFrame, pd.DataFrame]: queries and gold dataframes
+    """
     required = {id_col, retrieval_col, scoring_col, target_id_col, match_col}
     missing = required - set(df_test.columns)
     if missing:
@@ -127,7 +143,19 @@ def save_split_and_eval_artifacts(
     df_train: pd.DataFrame,
     df_val: pd.DataFrame,
     df_test: pd.DataFrame,
-):
+) -> dict[str, str]:
+    """
+    Save train/val/test splits and evaluation artifacts to disk.
+
+    Args:
+        base_dataset_csv_path (str): base path for dataset CSV files
+        df_train (pd.DataFrame): training dataframe
+        df_val (pd.DataFrame): validation dataframe
+        df_test (pd.DataFrame): test dataframe
+
+    Returns:
+        dict[str, str]: paths to saved CSV files
+    """
     base = Path(base_dataset_csv_path)
     stem = base.with_suffix("")
 

@@ -11,5 +11,7 @@ prova2.py
 datasets/test_split.csv
 datasets/test_split_inference.csv
 datasets/val_split.csv
+datasets/flopo_pto_test.csv
+datasets/pto.owl
 notebooks/outputs/
 runs_toEvaluate

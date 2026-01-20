@@ -2,9 +2,6 @@ import pandas as pd
 import re
 import torch
 from sentence_transformers import SentenceTransformer, util
-from sklearn.feature_extraction.text import TfidfVectorizer
-from sklearn.metrics.pairwise import cosine_similarity
-from scipy.sparse import spmatrix
 
 def normalize(
         text: str
@@ -86,22 +83,6 @@ def is_bad_hard_negative(
     if s1 in target_synonyms or s2 in source_synonyms:
         return True
 
-    """
-    # TF-IDF
-    idx1 = label2idx.get(s1)
-    idx2 = label2idx.get(s2)
-
-    vec1 = tfidf_matrix[idx1]
-    vec2 = tfidf_matrix[idx2]
-
-    sim = cosine_similarity(vec1, vec2)[0][0]
-
-    # too similar
-    if sim >= 0.8:
-        print(f"Too similar: '{s1}' - '{s2}' (sim={sim:.2f})")
-        return True
-    """
-
     return False
 
 
@@ -109,14 +90,13 @@ def generate_hard_negatives(
         df1: pd.DataFrame,
         df2: pd.DataFrame,
         df_align: pd.DataFrame,
-        model_name: str = "sentence-transformers/all-mpnet-base-v2",
         num_hard_negatives: int = 100,
         top_n: int = 20,
 ) -> pd.DataFrame:
     """Generate hard negatives using SBERT embeddings and lexical similarity filtering.
 
     Parameters:
-        df1 (pd.DataFrame): fist dataframe
+        df1 (pd.DataFrame): first dataframe
         df2 (pd.DataFrame): second dataframe
         df_align (pd.DataFrame): alignment dataframe to avoid sampling alignments
         num_hard_negatives (int, optional): number of hard negatives to generate. Defaults to 100.
@@ -138,7 +118,7 @@ def generate_hard_negatives(
     device = "cuda" if torch.cuda.is_available() else "cpu"
     
     model_name = "pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb"
-    model = SentenceTransformer(model_name).to(device) # or pritamdeka/BioBERT-mnli-snli-scinli-scitail-mednli-stsb or pritamdeka/S-Scibert-snli-multinli-stsb
+    model = SentenceTransformer(model_name).to(device)
 
     embeddings1 = model.encode(df1["source_text"].tolist(), show_progress_bar=True, convert_to_tensor=True) # short_text
     embeddings2 = model.encode(df2["target_text"].tolist(), show_progress_bar=True, convert_to_tensor=True) # rich_text
@@ -158,12 +138,6 @@ def generate_hard_negatives(
     df2["norm_label"] = df2["target_label"].apply(normalize)
     df1["norm_synonyms"] = df1["source_synonyms"].apply(normalize_synonyms)
     df2["norm_synonyms"] = df2["target_synonyms"].apply(normalize_synonyms)
-
-    # TF-IDF initalization
-    # all_labels = df1["norm_label"].tolist() + df2["norm_label"].tolist()
-    # tfidf_vectorizer = TfidfVectorizer(analyzer='char_wb', ngram_range=(2, 4), min_df=1)
-    # tfidf_matrix = tfidf_vectorizer.fit_transform(all_labels)
-    # label2idx = {label: idx for idx, label in enumerate(all_labels)}
 
     for idx1, hits in enumerate(hits_list):
         src_row = df1.iloc[idx1]
